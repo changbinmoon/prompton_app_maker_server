@@ -99,3 +99,5 @@
 - **Consumer Status**: COMPLETE
 - **Producer Status**: Backend implementation pending
 - **Hermes Status**: Pending standalone CLI path/arguments and retry/fallback values
+- **Implementation Commit**: `3b2779e6bf1c3dd7b1c66d5c7cced806218c8ff0`
+- **Remote Delivery**: PUSHED and SHA verified on `origin/feature/ai-worker-operational-readiness`
