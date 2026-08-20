@@ -205,3 +205,9 @@
 **Context**: Operations는 AI-DLC상 placeholder이므로 실제 배포/테스트는 실행하지 않음. AWS 리소스 변경과 모델 비용이 수반되어 격리 리소스 및 명시적 승인 전에는 production activation 금지.
 
 ---
+## Remote Push Attempt Blocked
+**Timestamp**: 2026-08-20T07:31:19Z
+**AI Response**: "`feature/ai-worker-operational-readiness`를 origin에 push하려 했으나 GitHub HTTPS username/credentials가 없어 실패함. gh CLI, credential helper, SSH private key/agent, GITHUB_TOKEN, GH_TOKEN을 확인했으나 모두 사용할 수 없었음."
+**Context**: Git delivery blocked by missing GitHub authentication. 로컬 브랜치와 커밋은 안전하게 유지되며 인증 구성 후 `git push -u origin feature/ai-worker-operational-readiness` 재실행 필요.
+
+---

@@ -72,3 +72,6 @@
 - **Operational Test Status**: NOT STARTED
 - **Reason**: 실제 AWS 변경과 Opus 5 비용이 발생하므로 격리 리소스 및 명시적 테스트 승인 필요
 - **Primary Blockers**: field-level `requirements.json` 계약, 테스트 EC2/IAM/Queue-DLQ 격리 검증, Java/Android Gradle Plugin 호환 조합
+- **Remote Push Status**: BLOCKED (2026-08-20T07:31:19Z) - GitHub HTTPS credentials unavailable
+- **Prepared Local Commit**: `55483f9 fix: align kiro CLI and add operational test runbook`
+- **Unblock Requirement**: GitHub credential helper, authenticated `gh`, fine-grained token, or SSH private key/agent
