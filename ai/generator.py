@@ -5,10 +5,10 @@
 비즈니스 규칙: BR-008 (AI_GENERATION_FAILED 분류)
 NFR 패턴: Pattern 4 (Fail-Fast for External Processes - 재시도 없음)
 
-미결정 사항:
-    requirements.md 섹션 9에 따라 kiro-cli의 정확한 CLI 인터페이스는 확정되지 않았다.
-    호출 인자는 KIRO_CLI_ARGS_TEMPLATE로 분리해 두었으므로, 실제 인터페이스가
-    확정되면 이 상수만 수정하면 된다.
+CLI compatibility:
+    kiro-cli 2.18.1에서 지원되는 `chat --no-interactive` 인터페이스를 사용한다.
+    모델은 요구사항에 따라 `claude-opus-5`로 고정하고, 자동 실행 권한은
+    `fs_read,fs_write`로 제한한다.
 """
 
 from __future__ import annotations
@@ -26,18 +26,27 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: kiro-cli 호출 인자 템플릿 (미확정 인터페이스 - 확정 시 이 상수만 수정)
-#: 사용 가능한 치환 키: requirements, assets, output
+#: kiro-cli 2.18.1의 비대화식 코드 생성 호출 템플릿.
+#: requirements와 assets는 fs_read로 읽고, 생성 결과는 fs_write로만 작성하도록
+#: 신뢰 도구를 제한한다. requirements.json은 사용자 입력이므로 shell 실행 권한을 주지 않는다.
+KIRO_CLI_MODEL = "claude-opus-5"
 KIRO_CLI_ARGS_TEMPLATE: tuple[str, ...] = (
-    "generate",
-    "--requirements",
-    "{requirements}",
-    "--output",
-    "{output}",
+    "chat",
+    "--no-interactive",
+    "--model",
+    KIRO_CLI_MODEL,
+    "--trust-tools=fs_read,fs_write",
+    (
+        "Generate a complete, buildable Android application project in the current working "
+        "directory. Read the requirements from {requirements}. Optional image assets are in "
+        "{assets}; continue without assets if that directory is empty. Write every generated "
+        "file under {output} only and do not modify files outside that directory. Finish only "
+        "after creating a Gradle project marker such as settings.gradle or settings.gradle.kts."
+    ),
 )
 
-#: 에셋이 존재할 때 추가되는 인자
-KIRO_CLI_ASSETS_ARGS: tuple[str, ...] = ("--assets", "{assets}")
+#: Assets are described in the single positional chat prompt; no unsupported CLI option is added.
+KIRO_CLI_ASSETS_ARGS: tuple[str, ...] = ()
 
 #: 생성 결과가 Android 프로젝트인지 확인하는 마커 (하나라도 존재하면 통과)
 ANDROID_PROJECT_MARKERS: tuple[str, ...] = (

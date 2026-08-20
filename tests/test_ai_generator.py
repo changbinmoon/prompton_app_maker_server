@@ -55,7 +55,7 @@ class RunRecorder:
 def test_generate_code_success(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """정상 생성 시 출력 디렉토리를 반환한다."""
+    """정상 생성 시 실제 kiro-cli chat 규격으로 호출하고 출력 디렉토리를 반환한다."""
     requirements = _write_requirements(tmp_path / "requirements.json")
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -67,15 +67,23 @@ def test_generate_code_success(
     result = AIGenerator(config).generate_code(requirements, assets, output)
 
     assert result == output
-    assert recorder.commands[0][0] == config.kiro_cli_path
-    assert str(requirements) in recorder.commands[0]
-    assert str(output) in recorder.commands[0]
+    command = recorder.commands[0]
+    assert command[0] == config.kiro_cli_path
+    assert command[1] == "chat"
+    assert "--no-interactive" in command
+    assert command[command.index("--model") + 1] == "claude-opus-5"
+    assert "--trust-tools=fs_read,fs_write" in command
+    prompt = command[-1]
+    assert str(requirements) in prompt
+    assert str(assets) in prompt
+    assert str(output) in prompt
+    assert recorder.kwargs[0]["cwd"] == str(output)
 
 
-def test_generate_code_includes_assets_arg_when_present(
+def test_generate_code_includes_assets_path_when_present(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """에셋이 있으면 --assets 인자가 추가된다."""
+    """에셋이 있으면 단일 chat 프롬프트에 에셋 경로가 포함된다."""
     requirements = _write_requirements(tmp_path / "requirements.json")
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -87,14 +95,14 @@ def test_generate_code_includes_assets_arg_when_present(
 
     AIGenerator(config).generate_code(requirements, assets, output)
 
-    assert "--assets" in recorder.commands[0]
-    assert str(assets) in recorder.commands[0]
+    assert str(assets) in recorder.commands[0][-1]
+    assert "--assets" not in recorder.commands[0]
 
 
-def test_generate_code_omits_assets_arg_when_empty(
+def test_generate_code_omits_unsupported_assets_option_when_empty(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """에셋이 없으면 --assets 인자를 넣지 않는다 (BR-014)."""
+    """에셋이 없어도 실제 CLI에 없는 --assets 옵션을 추가하지 않는다 (BR-014)."""
     requirements = _write_requirements(tmp_path / "requirements.json")
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -106,6 +114,7 @@ def test_generate_code_omits_assets_arg_when_empty(
     AIGenerator(config).generate_code(requirements, assets, output)
 
     assert "--assets" not in recorder.commands[0]
+    assert str(assets) in recorder.commands[0][-1]
 
 
 def test_generate_code_missing_requirements(config: Config, tmp_path: Path) -> None:

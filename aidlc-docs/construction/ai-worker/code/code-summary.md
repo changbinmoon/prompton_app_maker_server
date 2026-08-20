@@ -160,7 +160,7 @@
 
 | 항목 | 현재 구현 | 확정 시 수정 위치 |
 |------|-----------|-------------------|
-| kiro-cli CLI 인터페이스 | `generate --requirements <p> --output <d> [--assets <d>]` 가정 | `ai/generator.py`의 `KIRO_CLI_ARGS_TEMPLATE` 상수만 수정 |
+| kiro-cli CLI 인터페이스 | `chat --no-interactive --model claude-opus-5 --trust-tools=fs_read,fs_write <prompt>` (2.18.1 검증) | kiro-cli 버전 변경 시 `chat --help`와 모델 목록 호환성 재검증 |
 | requirements.json 스키마 | JSON 객체 여부만 검증 | `s3/client.py::download_requirements` 검증 로직 확장 |
 | Android SDK/Gradle 경로 | 환경 변수로 주입 (`env.example` 참고) | `deploy/env.example`, systemd `ReadWritePaths` |
 
