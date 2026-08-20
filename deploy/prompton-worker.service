@@ -1,0 +1,41 @@
+[Unit]
+Description=Prompton AI Worker
+Documentation=https://github.com/prompton/prompton-ai-worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prompton
+Group=prompton
+WorkingDirectory=/opt/prompton-ai-worker
+ExecStart=/opt/prompton-ai-worker/.venv/bin/python -m main
+EnvironmentFile=/etc/prompton-worker/env
+
+# 자동 재시작 (NFR Design Pattern 6: Process Supervisor)
+Restart=on-failure
+RestartSec=5
+
+# Graceful Shutdown (NFR Design Pattern 7)
+# SIGTERM 수신 시 진행 중인 Job을 완료한 뒤 종료한다.
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=300
+
+# 로그: stdout/stderr -> journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=prompton-worker
+
+# 보안 강화
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/data/jobs
+
+# Android SDK / Gradle 캐시 등 빌드 도구가 쓰기 필요한 경로가 있으면 여기에 추가한다.
+# 예) ReadWritePaths=/data/jobs /opt/android-sdk /home/prompton/.gradle
+
+[Install]
+WantedBy=multi-user.target
