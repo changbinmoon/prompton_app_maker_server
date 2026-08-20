@@ -13,7 +13,7 @@ C) 기존 자유 텍스트와 structured JSON 입력을 모두 지원한다.
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: X = Client에게 json을 받아 hermes 를 통해 프롬프트를 정제
 
 ## Question 2
 `applicationId`, SDK 버전, 언어, UI toolkit의 소유자는 누구인가?
@@ -26,7 +26,7 @@ C) Worker가 prompt를 보고 임의로 결정한다.
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: C
 
 ## Question 3
 Android SDK 버전 정책은 무엇인가?
@@ -39,7 +39,7 @@ C) 허용 범위 내에서 Client가 선택한다.
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: X = Client에게 AOS 버전을 받아 minSDK를 그 버전으로 설정, 없을 경우 A안
 
 ## Question 4
 MVP에서 사용자 앱 요구사항을 얼마나 구조화할 것인가?
@@ -52,7 +52,7 @@ C) 자유 텍스트를 제거하고 screens, features, theme을 모두 구조화
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: A
 
 ## Question 5
 정의되지 않은 JSON 필드는 어떻게 처리할 것인가?
@@ -65,7 +65,7 @@ C) unknown field는 거부하되 명시적인 `extensions` 객체 내부만 자�
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: A
 
 ## Question 6
 JSON Schema의 단일 source of truth를 어디에 둘 것인가?
@@ -78,4 +78,4 @@ C) Backend OpenAPI 문서에만 정의하고 Worker는 별도 검증 로직을 �
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: B

@@ -75,3 +75,12 @@
 - **Remote Push Status**: PUSHED (verified 2026-08-20T07:40:54Z)
 - **Remote Branch**: `origin/feature/ai-worker-operational-readiness`
 - **Verified Delivery Base Commit**: `6ce19f9247304094f0d1e7f4c65ec99b43196181`
+
+## Requirements Contract Decision Status
+- **Reviewed At**: 2026-08-20T07:53:44Z
+- **Original Answers**: Complete (6/6)
+- **Status**: CLARIFICATION REQUIRED
+- **Contradiction**: Q2 Worker-owned SDK vs Q3 Client AOS-derived minSdk
+- **Ambiguities**: Hermes execution boundary, Client JSON shape, AOS version representation, targetSdk and applicationId ownership
+- **Clarification File**: `aidlc-docs/operations/requirements-contract-clarification-questions.md`
+- **Implementation Gate**: JSON Schema and Worker validation blocked until 5 clarification answers are complete
