@@ -1,16 +1,18 @@
 # requirements.json 계약 제안서
 
+> **Superseded runtime design (2026-08-20)**: The approved runtime now stores the original Client JSON object in S3, applies Worker-owned Android guardrails, refines with Hermes, and falls back to raw Kiro input. The canonical envelope below is retained only as historical design context.
+
 ## 현재 상태
 
-- Canonical v1 schema와 Worker validation은 구현 완료됐다.
-- 원본 Client 임의 JSON은 `clientPayload`에 보존한다.
-- Backend는 Android 필드를 검증·보정하여 canonical JSON을 생성해야 한다.
-- Hermes는 Worker에서 Kiro 전에 실행하는 방향이지만 standalone 경로·인자와 재시도/fallback이 미정이라 구현되지 않았다.
-- 실제 source of truth는 `contracts/requirements.schema.json`과 `contracts/README.md`다.
+- Worker runtime은 S3의 원본 Client JSON object를 64 KiB/UTF-8/object 조건으로 검증한다.
+- Android 정책은 Worker가 Hermes 입력과 Kiro fallback에 guardrail로 추가한다.
+- Hermes v0.20.4 one-shot, 3회 시도, `refined-prompt.md`, raw Kiro fallback이 구현됐다.
+- Canonical v1 schema와 fixture는 optional reference artifact로만 유지한다.
+- Active source of truth는 `contracts/README.md`와 raw-flow code generation plan이다.
 
 ## 결론
 
-Client의 임의 JSON을 Backend가 canonical envelope로 감싸고 정규화된 Android 정책과 asset metadata를 추가한다. Worker는 canonical JSON을 엄격히 검증한 뒤 사용한다.
+아래 canonical envelope 제안은 historical context이며 현재 runtime에 적용되지 않는다. Active flow는 Client raw JSON을 Backend가 S3에 저장하고 Worker가 Hermes를 통해 prompt로 정제하는 구조다.
 
 구현 전 확인된 계약 불일치:
 

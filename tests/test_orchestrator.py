@@ -99,16 +99,9 @@ class FakeS3Client:
         if self.download_error is not None:
             raise self.download_error
         payload: dict[str, Any] = {
-            "schemaVersion": "1.0",
-            "clientPayload": {"requirements": "demo"},
-            "android": {
-                "applicationId": "com.prompton.generated.j1234567890abcdef",
-                "minSdk": 26,
-                "targetSdk": 35,
-                "language": "Kotlin",
-                "uiToolkit": "Jetpack Compose",
-            },
-            "assets": [],
+            "request": "demo Android app",
+            "aos": 34,
+            "custom": {"theme": "green"},
         }
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -129,17 +122,40 @@ class FakeS3Client:
         return key
 
 
+class FakePromptRefiner:
+    def __init__(self, succeeds: bool = True) -> None:
+        self.succeeds = succeeds
+        self.calls: list[tuple[Path, Path, str]] = []
+
+    def refine(
+        self, requirements_path: Path, output_path: Path, job_id: str
+    ) -> Path | None:
+        self.calls.append((requirements_path, output_path, job_id))
+        if not self.succeeds:
+            return None
+        output_path.write_text("refined prompt", encoding="utf-8")
+        return output_path
+
+
 class FakeAIGenerator:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
-        self.calls: list[tuple[Path, Path, Path]] = []
+        self.calls: list[tuple[Path, Path, Path, str, Path | None]] = []
 
     def generate_code(
-        self, requirements_path: Path, assets_dir: Path, output_dir: Path
+        self,
+        requirements_path: Path,
+        assets_dir: Path,
+        output_dir: Path,
+        *,
+        job_id: str,
+        refined_prompt_path: Path | None = None,
     ) -> Path:
         if self.error is not None:
             raise self.error
-        self.calls.append((requirements_path, assets_dir, output_dir))
+        self.calls.append(
+            (requirements_path, assets_dir, output_dir, job_id, refined_prompt_path)
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "settings.gradle").write_text("x", encoding="utf-8")
         return output_dir
@@ -176,6 +192,7 @@ def build_orchestrator(
     sqs: FakeSQSClient | None = None,
     dynamo: FakeDynamoClient | None = None,
     s3: FakeS3Client | None = None,
+    refiner: FakePromptRefiner | None = None,
     ai: FakeAIGenerator | None = None,
     builder: FakeApkBuilder | None = None,
 ) -> tuple[WorkerOrchestrator, dict[str, Any]]:
@@ -184,6 +201,7 @@ def build_orchestrator(
         "sqs": sqs or FakeSQSClient(),
         "dynamo": dynamo or FakeDynamoClient(),
         "s3": s3 or FakeS3Client(),
+        "refiner": refiner or FakePromptRefiner(),
         "ai": ai or FakeAIGenerator(),
         "builder": builder or FakeApkBuilder(),
     }
@@ -192,6 +210,7 @@ def build_orchestrator(
         sqs_client=deps["sqs"],  # type: ignore[arg-type]
         s3_client=deps["s3"],  # type: ignore[arg-type]
         dynamo_client=deps["dynamo"],  # type: ignore[arg-type]
+        prompt_refiner=deps["refiner"],  # type: ignore[arg-type]
         ai_generator=deps["ai"],  # type: ignore[arg-type]
         apk_builder=deps["builder"],  # type: ignore[arg-type]
     )
@@ -257,11 +276,30 @@ def test_process_job_writes_required_logs(config: Config, message: SQSMessage) -
     logs: list[str] = deps["dynamo"].logs
     assert "[worker] 작업을 시작했습니다." in logs
     assert "[worker] 요구조건 다운로드 완료" in logs
+    assert "[hermes] 프롬프트 정제 시작" in logs
+    assert "[hermes] 프롬프트 정제 완료" in logs
     assert "[llm] 코드 생성 시작" in logs
     assert "[llm] 코드 생성 완료" in logs
     assert "[gradle] APK 빌드 시작" in logs
     assert "[gradle] APK 빌드 완료" in logs
     assert "[worker] 작업 완료" in logs
+
+
+def test_process_job_uses_raw_fallback_when_hermes_fails(
+    config: Config, message: SQSMessage
+) -> None:
+    """Hermes 최대 시도 실패는 Job 실패가 아니라 raw Kiro fallback으로 이어진다."""
+    orchestrator, deps = build_orchestrator(
+        config, refiner=FakePromptRefiner(succeeds=False)
+    )
+
+    orchestrator.process_job(message)
+
+    assert deps["dynamo"].status_sequence[-1] == JobStatus.SUCCESS
+    assert "[hermes] 프롬프트 정제 실패 - 원본 요구조건으로 계속" in deps["dynamo"].logs
+    ai: FakeAIGenerator = deps["ai"]
+    assert ai.calls[0][4] is None
+    assert deps["sqs"].deleted == ["rh-1"]
 
 
 def test_process_job_logs_asset_count_when_present(
@@ -464,9 +502,21 @@ def test_process_job_passes_expected_paths(config: Config, message: SQSMessage) 
 
     base = Path(config.work_dir) / message.job_id
     ai: FakeAIGenerator = deps["ai"]
+    refiner: FakePromptRefiner = deps["refiner"]
     builder: FakeApkBuilder = deps["builder"]
 
-    assert ai.calls[0] == (base / "requirements.json", base / "assets", base / "project")
+    assert refiner.calls[0] == (
+        base / "requirements.json",
+        base / "refined-prompt.md",
+        message.job_id,
+    )
+    assert ai.calls[0] == (
+        base / "requirements.json",
+        base / "assets",
+        base / "project",
+        message.job_id,
+        base / "refined-prompt.md",
+    )
     assert builder.calls[0] == (base / "project", base / "output" / "app-debug.apk")
 
 

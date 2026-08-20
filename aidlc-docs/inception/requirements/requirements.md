@@ -355,10 +355,10 @@ jobs/{jobId}/
 
 | 항목 | 현재 상태 | 비고 |
 |------|-----------|------|
-| requirements.json 스키마 | v1 확정 및 Worker 구현 완료 | `contracts/requirements.schema.json`, Backend producer 적용 필요 |
+| S3 Client 요청 계약 | 확정 및 Worker 구현 완료 | UTF-8 top-level JSON object, 최대 64 KiB, arbitrary fields 보존 |
 | 로그 및 모니터링 수준 | 미정 | 1차 구현 후 결정 가능 |
 | kiro-cli 호출 방식 상세 | 2.18.1 `chat --no-interactive` 검증 완료 | `claude-opus-5`, fs_read/fs_write 제한 |
-| Hermes prompt refinement | 인터페이스 미정 | standalone 실행 경로/인자, 재시도·fallback 확정 필요 |
+| Hermes prompt refinement | Worker 구현 완료 | v0.20.4 one-shot, host provider/model, 3회 시도, raw Kiro fallback; live provider 검증 필요 |
 
 ---
 

@@ -7,6 +7,7 @@ import pytest
 from config.settings import (
     DEFAULT_AWS_REGION,
     DEFAULT_CLEANUP_HOURS,
+    DEFAULT_HERMES_CLI_PATH,
     DEFAULT_VISIBILITY_TIMEOUT,
     DEFAULT_WORK_DIR,
     ConfigError,
@@ -26,6 +27,7 @@ OPTIONAL_ENV_KEYS = (
     "VISIBILITY_TIMEOUT",
     "CLEANUP_HOURS",
     "LOG_LEVEL",
+    "HERMES_CLI_PATH",
     "KIRO_CLI_PATH",
     "GRADLE_PATH",
 )
@@ -57,6 +59,7 @@ def test_load_config_applies_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.visibility_timeout == DEFAULT_VISIBILITY_TIMEOUT
     assert config.cleanup_hours == DEFAULT_CLEANUP_HOURS
     assert config.log_level == "INFO"
+    assert config.hermes_cli_path == DEFAULT_HERMES_CLI_PATH
 
 
 def test_load_config_reads_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,6 +70,7 @@ def test_load_config_reads_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VISIBILITY_TIMEOUT", "600")
     monkeypatch.setenv("CLEANUP_HOURS", "48")
     monkeypatch.setenv("LOG_LEVEL", "debug")
+    monkeypatch.setenv("HERMES_CLI_PATH", "/usr/local/bin/hermes")
     monkeypatch.setenv("KIRO_CLI_PATH", "/usr/local/bin/kiro-cli")
     monkeypatch.setenv("GRADLE_PATH", "/opt/gradle/bin/gradle")
 
@@ -77,6 +81,7 @@ def test_load_config_reads_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert config.visibility_timeout == 600
     assert config.cleanup_hours == 48
     assert config.log_level == "DEBUG"
+    assert config.hermes_cli_path == "/usr/local/bin/hermes"
     assert config.kiro_cli_path == "/usr/local/bin/kiro-cli"
     assert config.gradle_path == "/opt/gradle/bin/gradle"
 

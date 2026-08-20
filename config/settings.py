@@ -32,6 +32,7 @@ DEFAULT_WORK_DIR = "/data/jobs"
 DEFAULT_VISIBILITY_TIMEOUT = 300
 DEFAULT_CLEANUP_HOURS = 24
 DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_HERMES_CLI_PATH = "hermes"
 DEFAULT_KIRO_CLI_PATH = "kiro-cli"
 DEFAULT_GRADLE_PATH = "gradle"
 
@@ -83,6 +84,7 @@ def load_config() -> Config:
         visibility_timeout=visibility_timeout,
         cleanup_hours=cleanup_hours,
         log_level=log_level,
+        hermes_cli_path=os.environ.get("HERMES_CLI_PATH", DEFAULT_HERMES_CLI_PATH),
         kiro_cli_path=os.environ.get("KIRO_CLI_PATH", DEFAULT_KIRO_CLI_PATH),
         gradle_path=os.environ.get("GRADLE_PATH", DEFAULT_GRADLE_PATH),
     )

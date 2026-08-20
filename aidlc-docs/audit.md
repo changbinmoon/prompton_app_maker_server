@@ -287,3 +287,81 @@
 **Context**: Worker-side contract implementation delivered. Backend producer and Hermes interface remain pending follow-up work.
 
 ---
+## Requirements Producer and Hermes Follow-up
+**Timestamp**: 2026-08-20T08:42:43Z
+**User Input**: "확정되지 않은 부분 진행해줘"
+**AI Response**: "Backend canonical requirements producer와 Hermes Worker 선처리의 미확정 항목을 재확인하고, 추측 없이 확정 가능한 범위부터 구현·검증을 시작함."
+**Context**: Continuation after Worker-side canonical requirements contract delivery.
+
+---
+## Pending Integration Decisions Requested
+**Timestamp**: 2026-08-20T08:42:43Z
+**AI Response**: "Hermes Agent v0.20.4의 `/home/ubuntu/.local/bin/hermes`, `--oneshot`, stdout 계약과 safe-mode/toolset 동작을 확인했다. 현재 workspace에 실제 Backend 저장소가 없어 producer 연결 위치를 확정할 수 없고 retry/fallback은 비용·장애 의미가 달라 `aidlc-docs/operations/pending-integrations-questions.md`에 4개 최소 질문을 생성했다."
+**Context**: Waiting for explicit answers before implementation. Security Baseline, Resiliency Baseline, and Property-Based Testing extensions remain disabled in aidlc-state.md and were not loaded or enforced.
+
+---
+## Pending Integration Answers Submitted
+**Timestamp**: 2026-08-20T08:50:48Z
+**User Input**: "진행"
+**AI Response**: "pending-integrations-questions.md의 답변을 읽고 완전성·유효성·모순을 검증한 뒤 구현을 계속 진행함."
+**Context**: Backend producer and Hermes integration follow-up.
+
+---
+## Pending Integration Answer Validation
+**Timestamp**: 2026-08-20T08:50:48Z
+**AI Response**: "Q2=B, Q3=A, Q4=A는 유효하고 서로 일관됨. Q1의 `Backend canonical producer가 뭐지?`는 선택지 답변이 아니므로 역할을 설명하고 가능한 범위를 다시 선택하는 `pending-integrations-clarification-questions.md` 단일 문항을 생성함."
+**Context**: Hermes policy is decided; implementation remains paused until Backend scope clarification is answered, per question-format rules.
+
+---
+## Raw Client JSON to Hermes Architecture Clarification
+**Timestamp**: 2026-08-20T08:54:22Z
+**User Input**: "우리 생각은 Client에게 요청 JSON을 받으면 그걸 S3 서버에 저장하고 AI Worker가 그걸 가져다 Heremes에게 전달해 프롬프프트를 만들 계획인데 이걸 가능하게 하는 구현은?"
+**AI Response**: "현재 canonical ingress validation과 충돌함을 확인하고 raw-request loader, Hermes prompt refiner, refined-prompt.md, Kiro fallback 구조로 재설계하되 Android normalization 책임 이동을 명확히 함."
+**Context**: User supersedes the prior assumption that Backend must write a canonical envelope before Worker consumption.
+
+---
+## Raw Flow Contradiction Detected
+**Timestamp**: 2026-08-20T08:54:22Z
+**AI Response**: "사용자 목표는 raw Client JSON을 S3에서 Worker가 읽어 Hermes에 전달하는 흐름으로 명확하다. 이는 canonical schema ingress와 Backend normalization 결정에 충돌하므로, Android guardrail 소유자만 결정하는 `raw-client-hermes-flow-clarification.md` 단일 질문을 생성했다."
+**Context**: No runtime implementation started until the contradictory ownership decision is resolved.
+
+---
+## Raw Flow Clarification Submitted
+**Timestamp**: 2026-08-20T09:00:16Z
+**User Input**: "진행"
+**AI Response**: "raw-client-hermes-flow-clarification.md 답변을 검증하고 확정된 raw JSON→Hermes→Kiro 흐름 구현을 시작함."
+**Context**: Final ownership clarification before runtime changes.
+
+---
+## Raw Client Hermes Code Generation Plan Approval Prompt
+**Timestamp**: 2026-08-20T09:00:16Z
+**AI Response**: "`aidlc-docs/construction/plans/raw-client-hermes-integration-plan.md`에 5개 실행 단계와 24개 체크박스를 작성·검증했다. 실제 애플리케이션 코드 수정 전에 계획 전체에 대한 명시적 승인을 요청함."
+**Context**: Code Generation Part 1 complete; Part 2 must not begin until the user approves the plan.
+
+---
+## Raw Client Hermes Code Generation Plan Approved
+**Timestamp**: 2026-08-20T09:03:12Z
+**User Input**: "진행"
+**AI Response**: "raw-client-hermes-integration-plan.md 전체 계획 승인으로 기록하고 Step 1부터 Part 2 구현을 시작함."
+**Context**: Explicit approval for all five plan steps and the documented generation sequence.
+
+---
+## Raw Client Hermes Validation Resumed
+**Timestamp**: 2026-08-20T09:32:00Z
+**User Input**: "진행"
+**AI Response**: "132-test 전체 품질 게이트 이후 중단된 독립 리뷰부터 재개하고 결함 수정, 최종 검증, commit/push를 계속함."
+**Context**: Code generation plan Step 5 validation and delivery resumed after tool cancellation.
+
+---
+## Raw Client Hermes Independent Review
+**Timestamp**: 2026-08-20T09:32:00Z
+**AI Response**: "독립 senior reviewer가 raw S3 ingress, Hermes command/retry/output/log safety, write/decode/executable failure fallback, Kiro refined/raw guardrails, Config/workdir/deploy consistency, 132 tests와 strict checks를 검토하고 APPROVED 판정함. Blocking finding 없음."
+**Context**: Full local gate passed: 132 tests, Ruff, mypy strict 25 source files, compile, lock, systemd syntax, Markdown/JSON/Bash and diff validation.
+
+---
+## Raw Client Hermes Final Pre-Commit Validation
+**Timestamp**: 2026-08-20T09:32:00Z
+**AI Response**: "현재 worktree에서 pytest 132 passed/98 warnings, Ruff All checks passed, mypy strict 25 source files, compile, uv lock, systemd syntax, Markdown 20개, contract JSON 10개, embedded Bash/JSON, git diff whitespace 검증을 최종 재실행해 모두 통과함."
+**Context**: Independent review already APPROVED; implementation is ready for explicit staging and remote delivery.
+
+---

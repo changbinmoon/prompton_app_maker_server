@@ -8,9 +8,9 @@ Validate interactions among the single Worker unit's modules and its external de
 
 | Layer | Services | Current status |
 |---|---|---|
-| Local component integration | boto3 with moto, orchestrator with injected dependencies | Executed as part of the 105-test suite; passed |
-| CLI compatibility | Installed kiro-cli command and model discovery | Executed non-destructively; version 2.18.1 and model `claude-opus-5` confirmed |
-| Live service integration | Real SQS, S3, DynamoDB, kiro-cli model call, Gradle/Android | Not executed; requires approved AWS mutation and a backend-valid requirements payload |
+| Local component integration | boto3 with moto, orchestrator with injected dependencies | Executed in the local suite; passed |
+| CLI compatibility | Installed Hermes and kiro-cli command discovery | Hermes v0.20.4 and kiro-cli 2.18.1 confirmed non-destructively |
+| Live service integration | Real SQS, S3, DynamoDB, Hermes model, kiro-cli model, Gradle/Android | Not executed; requires approved AWS/model usage and a Backend-stored raw Client JSON object |
 
 ## Local Integration Suite
 
@@ -22,14 +22,16 @@ uv run pytest \
   tests/test_dynamo_client.py \
   tests/test_orchestrator.py \
   tests/test_visibility_extender.py \
+  tests/test_prompt_refiner.py \
   tests/test_ai_generator.py \
   tests/test_builder.py
 ```
 
 Key interactions covered:
-- S3 download, filtering, archive upload, APK upload, and post-upload size verification
+- S3 raw JSON object download/validation, asset filtering, archive upload, APK upload, and post-upload size verification
 - DynamoDB status, progress, artifact key, and append-only logs through moto
-- Orchestrator ordering from ANALYZING through SUCCESS
+- Orchestrator ordering from ANALYZING through Hermes, Kiro, BUILDING, and SUCCESS
+- Hermes one-shot command, 3-attempt backoff, output validation, and Kiro raw fallback
 - Failure-to-FAILED mapping and preservation of failed SQS messages
 - Visibility extension lifecycle
 - kiro-cli and Gradle subprocess command construction through deterministic fakes
@@ -38,10 +40,14 @@ Key interactions covered:
 
 1. Use dedicated test SQS/DLQ, S3, and DynamoDB resources whenever possible.
 2. Confirm the EC2 Instance Profile has only the required permissions.
-3. Confirm the final `requirements.json` contract with the Backend team. The Worker currently validates only that it is a JSON object.
-4. Confirm tool compatibility:
+3. Confirm that the Backend stores a UTF-8 top-level Client JSON object no larger than 64 KiB and enqueues its S3 pointer.
+4. Provision `HERMES_HOME` for the service user and confirm tool compatibility:
 
 ```bash
+hermes --version
+hermes --help
+hermes config get model.provider
+hermes config get model.default
 kiro-cli --version
 kiro-cli chat --help
 kiro-cli chat --list-models --format json-pretty
@@ -68,7 +74,7 @@ aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME"
 
 ### Setup
 
-Use a Backend-produced canonical v1 payload before invoking the model:
+Use a representative raw Client JSON object before invoking the models:
 
 ```bash
 set -euo pipefail
@@ -76,18 +82,13 @@ JOB_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 REQ_FILE="/tmp/requirements-${JOB_ID}.json"
 cat > "$REQ_FILE" <<'JSON'
 {
-  "schemaVersion": "1.0",
-  "clientPayload": {
-    "requirements": "Backend-approved deterministic smoke application"
-  },
-  "android": {
-    "applicationId": "com.prompton.integration.smoke",
-    "minSdk": 26,
-    "targetSdk": 35,
+  "request": "Backend-approved deterministic Android smoke application",
+  "aos": 34,
+  "applicationId": "com.prompton.integration.smoke",
+  "preferences": {
     "language": "Kotlin",
-    "uiToolkit": "Jetpack Compose"
-  },
-  "assets": []
+    "ui": "Jetpack Compose"
+  }
 }
 JSON
 
@@ -150,7 +151,9 @@ done
 
 - Status order is ANALYZING, GENERATING_CODE, BUILDING, SUCCESS.
 - Progress values are 25, 50, 75, 100.
-- Required logs are appended without credentials or signed URLs.
+- Hermes start plus either completion or raw-fallback is recorded; valid output creates `${WORK_DIR}/${JOB_ID}/refined-prompt.md`.
+- Kiro receives the original JSON and assets in both paths and the refined prompt when available.
+- Required logs are appended without Client values, credentials, or signed URLs.
 - `jobs/${JOB_ID}/source/project.zip` exists when source upload succeeds.
 - `jobs/${JOB_ID}/artifact/app-debug.apk` exists and has non-zero size.
 - DynamoDB `artifactKey` equals the APK key.

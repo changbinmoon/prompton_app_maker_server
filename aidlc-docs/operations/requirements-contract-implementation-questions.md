@@ -1,5 +1,7 @@
 # requirements.json 계약 구현 질문
 
+> **Superseded in part (2026-08-20)**: Questions 1-3 describe the former canonical ingress. The later approved flow uses raw Client JSON, Worker Android guardrails, Hermes host defaults with three attempts, and Kiro raw fallback. Questions 4-6 remain historical decision evidence.
+
 첫 번째 clarification으로 다음 방향은 확인되었다.
 
 - Backend가 Client 값을 검증하여 Android 설정을 canonical JSON에 기록한다.

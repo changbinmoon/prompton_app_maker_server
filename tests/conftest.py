@@ -28,6 +28,7 @@ def config(tmp_path: Path) -> Config:
         visibility_timeout=300,
         cleanup_hours=24,
         log_level="INFO",
+        hermes_cli_path="hermes",
         kiro_cli_path="kiro-cli",
         gradle_path="gradle",
     )

@@ -1,7 +1,8 @@
-"""Canonical requirements.json contract validation.
+"""Optional canonical requirements reference contract validation.
 
-The JSON Schema is the structural source of truth. Cross-field rules that
-Draft 2020-12 cannot express portably are enforced after schema validation.
+Raw Client JSON ingress does not call this validator. It remains available to shared
+contract consumers that explicitly produce the canonical envelope. Cross-field rules
+that Draft 2020-12 cannot express portably are enforced after schema validation.
 """
 
 from __future__ import annotations

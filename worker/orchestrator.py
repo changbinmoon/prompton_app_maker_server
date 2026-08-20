@@ -19,6 +19,7 @@ import types
 from typing import TYPE_CHECKING
 
 from ai.generator import AIGenerator
+from ai.refiner import PromptRefiner
 from build.builder import ApkBuilder
 from dynamo.client import DynamoClient
 from models.entities import Config, JobWorkDir, S3Paths, SQSMessage
@@ -48,6 +49,7 @@ class WorkerOrchestrator:
         sqs_client: SQSClient | None = None,
         s3_client: S3Client | None = None,
         dynamo_client: DynamoClient | None = None,
+        prompt_refiner: PromptRefiner | None = None,
         ai_generator: AIGenerator | None = None,
         apk_builder: ApkBuilder | None = None,
     ) -> None:
@@ -60,6 +62,7 @@ class WorkerOrchestrator:
             sqs_client: SQS 클라이언트 (테스트용 주입)
             s3_client: S3 클라이언트 (테스트용 주입)
             dynamo_client: DynamoDB 클라이언트 (테스트용 주입)
+            prompt_refiner: Hermes prompt 정제기 (테스트용 주입)
             ai_generator: AI 코드 생성기 (테스트용 주입)
             apk_builder: APK 빌더 (테스트용 주입)
         """
@@ -67,6 +70,11 @@ class WorkerOrchestrator:
         self._sqs = sqs_client if sqs_client is not None else SQSClient(config)
         self._s3 = s3_client if s3_client is not None else S3Client(config)
         self._dynamo = dynamo_client if dynamo_client is not None else DynamoClient(config)
+        self._refiner = (
+            prompt_refiner
+            if prompt_refiner is not None
+            else PromptRefiner(config.hermes_cli_path)
+        )
         self._ai = ai_generator if ai_generator is not None else AIGenerator(config)
         self._builder = apk_builder if apk_builder is not None else ApkBuilder(config)
 
@@ -229,22 +237,41 @@ class WorkerOrchestrator:
             self._dynamo.append_log(job_id, f"[worker] 에셋 {len(assets)}개 다운로드 완료")
 
     def _phase_generating_code(self, job_id: str, work: JobWorkDir) -> None:
-        """GENERATING_CODE 단계: kiro-cli로 앱 코드 생성.
+        """GENERATING_CODE 단계: Hermes prompt 정제 후 kiro-cli로 코드 생성.
+
+        Hermes가 최대 시도를 소진해도 Job을 실패시키지 않고 원본 Client JSON과
+        동일 Android guardrail을 사용하는 Kiro fallback을 실행한다.
 
         Args:
             job_id: 처리 중인 Job ID
             work: Job 작업 디렉토리 구조
 
         Raises:
-            AIGenerationError: 코드 생성 실패
+            AIGenerationError: Kiro 코드 생성 실패
         """
         self._transition(job_id, JobStatus.GENERATING_CODE)
-        self._dynamo.append_log(job_id, "[llm] 코드 생성 시작")
+        self._dynamo.append_log(job_id, "[hermes] 프롬프트 정제 시작")
 
+        refined_prompt = self._refiner.refine(
+            requirements_path=work.requirements_path,
+            output_path=work.refined_prompt_path,
+            job_id=job_id,
+        )
+        if refined_prompt is None:
+            self._dynamo.append_log(
+                job_id,
+                "[hermes] 프롬프트 정제 실패 - 원본 요구조건으로 계속",
+            )
+        else:
+            self._dynamo.append_log(job_id, "[hermes] 프롬프트 정제 완료")
+
+        self._dynamo.append_log(job_id, "[llm] 코드 생성 시작")
         self._ai.generate_code(
             requirements_path=work.requirements_path,
             assets_dir=work.assets_dir,
             output_dir=work.project_dir,
+            job_id=job_id,
+            refined_prompt_path=refined_prompt,
         )
         self._dynamo.append_log(job_id, "[llm] 코드 생성 완료")
 

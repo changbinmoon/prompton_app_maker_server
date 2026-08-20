@@ -125,4 +125,4 @@ Record the following in `test-results/performance/results.md`:
 
 ## Current Execution Status
 
-Performance tests were not run in the local Build and Test session. Running them would create real AWS Jobs, consume Opus 5 model capacity, and build generated Android projects. Execute them only after the requirements schema and test resource isolation are approved.
+Performance tests were not run in the local Build and Test session. Running them would create real AWS Jobs, consume Hermes and Opus 5 model capacity, and build generated Android projects. Execute them only after the raw Client JSON Backend path, service-user Hermes configuration, and test resource isolation are approved.

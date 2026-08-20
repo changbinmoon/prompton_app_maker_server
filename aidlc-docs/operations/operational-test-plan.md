@@ -20,20 +20,22 @@
 | DynamoDB | `prompton-jobs-dev`, PK `jobId` | 테스트 레코드만 변경 |
 | Worker 모델 | `claude-opus-5` | kiro-cli 인증 및 사용 승인 |
 | Worker CLI | kiro-cli 2.18.1 | `chat --no-interactive` 호환성 확인 |
+| Prompt Refiner | Hermes Agent v0.20.4 | service-user `HERMES_HOME`, provider/model, 사용 승인 |
 | 대상 호스트 | EC2 t3.xlarge 권장 | 실제 인스턴스/AMI/스토리지 확정 |
 
 ## 테스트 시작 전 필수 준비물
 
 ### 1. 계약과 테스트 데이터
 
-- [ ] Backend와 versioned `requirements.json` 필드 스키마 확정
-- [ ] 성공이 예상되는 대표 requirements fixture 1개
-- [ ] 실패가 예상되는 안전한 negative fixture 1개
-- [ ] 예상 Android application ID, 최소 SDK, target SDK 확정
+- [ ] Backend가 UTF-8 top-level raw Client JSON object를 64 KiB 이하로 S3에 저장하고 SQS pointer를 전송
+- [ ] 성공이 예상되는 대표 raw Client JSON fixture 1개
+- [ ] 실패가 예상되는 malformed/non-object/oversized fixture 1개
+- [ ] 예상 Android application ID, API level, Kotlin, Jetpack Compose guardrail 결과 확정
 - [ ] 선택적 PNG/JPEG asset fixture와 예상 개수 확정
+- [ ] Hermes 성공 시 `refined-prompt.md`와 실패 시 raw Kiro fallback 판정 기준 확정
 - [ ] SQS schema version 1.0 producer/consumer 계약 테스트 통과
 
-`requirements.json`은 현재 JSON 객체 여부만 검증하므로 필드 스키마 미확정 상태에서는 실제 성공 E2E의 판정 기준이 없다. 이 항목은 첫 번째 차단 요소다.
+Worker-side raw ingress, Hermes command/retry/output, and Kiro fallback contracts are implemented. The remaining contract gate is a real Backend endpoint that stores the raw object and sends the S3 pointer, plus live model execution evidence.
 
 ### 2. 격리된 AWS 테스트 리소스
 
@@ -52,6 +54,8 @@
 - [ ] `/data/jobs` 전용 writable 경로와 충분한 여유 공간
 - [ ] `/data/gradle` 사용 시 디렉터리 생성, 서비스 사용자 소유권, systemd `ReadWritePaths` 반영
 - [ ] Python 3.12와 uv 0.8.12
+- [ ] Hermes Agent v0.20.4 설치와 service-user `HERMES_HOME=/data/hermes` provider/model 설정
+- [ ] `/data/hermes` 서비스 사용자 소유권과 systemd `ReadWritePaths` 반영
 - [ ] kiro-cli 2.18.1 로그인 및 `claude-opus-5` 모델 조회
 - [ ] Java, Gradle, Android SDK, Android Build Tools 설치
 - [ ] Java 버전과 생성 프로젝트의 Android Gradle Plugin 호환성 확인
@@ -65,6 +69,7 @@
 - [ ] DynamoDB: GetItem, UpdateItem
 - [ ] 리소스 ARN 수준 최소 권한과 명시적 거부 테스트
 - [ ] `/etc/prompton-worker/env` mode 0640 이하
+- [ ] `HERMES_CLI_PATH` 절대 경로와 `HERMES_HOME=/data/hermes` 설정
 - [ ] 환경 파일에 AWS Access Key, Secret Key, Session Token이 없음
 - [ ] 필수 환경 변수와 실제 리소스명 일치
 
@@ -89,9 +94,10 @@
 
 ## Gate 0: 계약 및 변경 승인
 
-1. `requirements.json` 스키마와 대표 fixture를 Backend와 승인한다.
-2. 전용 리소스 또는 dev 테스트 윈도우를 승인한다.
-3. 비용, 중단 조건, cleanup 책임을 승인한다.
+1. Raw Client JSON S3 key/size/object 계약과 대표 fixture를 Backend와 승인한다.
+2. Hermes Android guardrail, 3-attempt retry, `refined-prompt.md`, and raw Kiro fallback 판정 기준을 승인한다.
+3. 전용 리소스 또는 dev 테스트 윈도우를 승인한다.
+4. 비용, 중단 조건, cleanup 책임을 승인한다.
 
 **통과 조건**: 모든 필수 입력과 변경 승인이 문서화됨.
 
@@ -113,6 +119,9 @@ uv lock --check
 4. 서비스를 시작하기 전 설정을 검증한다.
 
 ```bash
+hermes --version
+hermes config get model.provider
+hermes config get model.default
 kiro-cli --version
 kiro-cli chat --list-models --format json-pretty
 gradle --version
@@ -132,7 +141,7 @@ uv run ruff check .
 uv run mypy main.py config models sqs s3 dynamo ai build utils worker
 ```
 
-**통과 조건**: 118 tests passed, Ruff 통과, mypy strict 통과, compile 성공.
+**통과 조건**: 132 tests passed, Ruff 통과, mypy strict 25 source files 통과, compile 성공.
 
 ## Gate 3: AWS 및 IAM 비파괴 preflight
 
@@ -163,12 +172,15 @@ aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME"
 3. 승인된 requirements와 assets를 Job prefix에 업로드한다.
 4. SQS schema 1.0 메시지를 1건 전송한다.
 5. systemd Worker를 시작하고 로그를 추적한다.
-6. ANALYZING, GENERATING_CODE, BUILDING, SUCCESS 순서를 기록한다.
-7. source zip, APK, artifactKey, SQS 삭제 순서를 검증한다.
-8. APK를 내려받아 SHA-256과 Android manifest를 검증한다.
+6. ANALYZING, GENERATING_CODE, Hermes completion/fallback, BUILDING, SUCCESS 순서를 기록한다.
+7. Hermes 성공 시 `refined-prompt.md` 내용이 64 KiB 이하인지, 실패 시 Kiro raw fallback 로그가 있는지 확인한다.
+8. source zip, APK, artifactKey, SQS 삭제 순서를 검증한다.
+9. APK를 내려받아 SHA-256과 Android manifest를 검증한다.
 
 **통과 조건**:
 - progress가 25, 50, 75, 100 순서
+- Hermes가 Kiro 전에 실행되고 raw JSON/stdout/stderr가 로그에 노출되지 않음
+- Hermes 성공 또는 명시적 raw fallback 후 Kiro가 실행됨
 - SUCCESS 전에 APK upload가 검증됨
 - SUCCESS 이후에만 SQS 메시지 삭제
 - APK가 비어 있지 않고 Android 도구로 파싱됨
@@ -248,11 +260,11 @@ aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME"
 
 ## 현재 차단 요소
 
-1. **BLOCKER**: Backend producer의 canonical JSON 정규화와 shared schema/fixture 검증 미구현
-2. **BLOCKER**: standalone Hermes 실행 경로·인자 및 재시도/fallback 정책 미확정
+1. **BLOCKER**: 실제 Backend 저장소/API의 raw Client JSON S3 저장 및 SQS pointer 연결 미구현/미검증
+2. **BLOCKER**: service-user Hermes `HERMES_HOME` provider/model/credential provisioning과 live one-shot 호출 미검증
 3. **BLOCKER**: 실제 테스트 EC2, IAM Role, Queue/DLQ 격리 방식 미검증
 4. **BLOCKER**: 실제 Java/Android Gradle Plugin 호환 조합 미확정
-5. **APPROVAL REQUIRED**: AWS 리소스 변경과 Opus 5 사용 비용
+5. **APPROVAL REQUIRED**: AWS 리소스 변경, Hermes provider, Opus 5 사용 비용
 6. **PENDING**: live E2E, performance baseline, dependency/Bandit/IAM/systemd security 검증
 
 이 차단 요소가 해소되기 전에는 production activation을 승인하지 않는다.

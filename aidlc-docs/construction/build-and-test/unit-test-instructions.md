@@ -26,10 +26,11 @@ uv run pytest
 ```
 
 Expected result for the current revision:
-- Collected: 118
-- Passed: 118
+- Collected: 132
+- Passed: 132
 - Failed: 0
 - Errors: 0
+- Warnings: 98 botocore deprecation warnings through moto
 
 The suite can emit botocore `datetime.utcnow()` deprecation warnings through moto. They are currently non-blocking, but new warning categories should be reviewed rather than ignored globally.
 
@@ -41,6 +42,7 @@ uv run pytest tests/test_requirements_contract.py
 uv run pytest tests/test_sqs_client.py
 uv run pytest tests/test_s3_client.py
 uv run pytest tests/test_dynamo_client.py
+uv run pytest tests/test_prompt_refiner.py
 uv run pytest tests/test_ai_generator.py
 uv run pytest tests/test_builder.py
 uv run pytest tests/test_visibility_extender.py
@@ -71,17 +73,18 @@ Report location: `test-results/unit/pytest.xml`.
 |---|---|
 | Config | Required variables, defaults, validation, boto retry policy |
 | SQS | Long polling, schema parsing, deletion, visibility extension |
-| S3 | Requirements and assets, source archive, APK upload verification |
+| S3 | Raw Client JSON size/encoding/object validation, assets, source archive, APK upload verification |
 | DynamoDB | Status updates, progress preservation, logs, sanitization |
-| AI generation | Real CLI argument shape via subprocess fake, model selection, output validation, failures |
+| Hermes refinement | Restricted one-shot command, Android guardrails, output limits, atomic write, retry, log non-disclosure |
+| AI generation | Refined prompt and raw fallback CLI argument shape, model selection, output validation, failures |
 | APK build | Wrapper handling, assembleDebug invocation, artifact discovery, failures |
-| Orchestration | State sequence, idempotency, failure mapping, SQS deletion order, shutdown |
+| Orchestration | State sequence, Hermes-before-Kiro, raw fallback, idempotency, failure mapping, SQS deletion order, shutdown |
 | Visibility extender | Interval, repeated extension, failure tolerance, stop behavior |
 | Cleanup and log security | Work-directory lifecycle and sensitive-value redaction |
 
 ## Coverage Measurement
 
-Statement or branch coverage is not currently configured, and no coverage percentage is claimed. The test gate is behavior-based: all 118 tests, lint, and strict type checking must pass. If a numeric coverage gate is introduced, add a pinned `pytest-cov` dependency through an explicit dependency-update change and record the agreed threshold before enforcing it.
+Statement or branch coverage is not currently configured, and no coverage percentage is claimed. The test gate is behavior-based: all 132 tests, lint, and strict type checking must pass. If a numeric coverage gate is introduced, add a pinned `pytest-cov` dependency through an explicit dependency-update change and record the agreed threshold before enforcing it.
 
 ## Failure Triage
 
@@ -89,7 +92,7 @@ Statement or branch coverage is not currently configured, and no coverage percen
 2. Determine whether the failure is code, test isolation, dependency drift, or environment setup.
 3. For moto failures, confirm the locked boto3, botocore, and moto versions were installed with `--frozen`.
 4. For subprocess tests, verify they use `RunRecorder` or `GradleStub`; unit tests must not call a real model or real Gradle build.
-5. Fix the cause, rerun the focused file, then rerun all 118 tests.
+5. Fix the cause, rerun the focused file, then rerun all 132 tests.
 6. Run Ruff and mypy after every code change:
 
 ```bash

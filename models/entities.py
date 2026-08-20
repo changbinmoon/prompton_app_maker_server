@@ -39,6 +39,7 @@ class Config:
     visibility_timeout: int
     cleanup_hours: int
     log_level: str
+    hermes_cli_path: str
     kiro_cli_path: str
     gradle_path: str
 
@@ -153,6 +154,7 @@ class JobWorkDir:
 
     base_path: Path
     requirements_path: Path
+    refined_prompt_path: Path
     assets_dir: Path
     project_dir: Path
     output_dir: Path
@@ -174,6 +176,7 @@ class JobWorkDir:
         return cls(
             base_path=base,
             requirements_path=base / "requirements.json",
+            refined_prompt_path=base / "refined-prompt.md",
             assets_dir=base / "assets",
             project_dir=base / "project",
             output_dir=output_dir,

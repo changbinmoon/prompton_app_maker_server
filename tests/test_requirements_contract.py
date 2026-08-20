@@ -1,4 +1,8 @@
-"""Canonical requirements.json contract tests."""
+"""Optional canonical reference contract tests.
+
+The raw Client JSON S3 ingress does not invoke this validator. These fixtures remain
+available to Backend/shared-contract consumers that choose to emit a canonical envelope.
+"""
 
 from __future__ import annotations
 

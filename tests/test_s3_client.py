@@ -19,14 +19,6 @@ from models.requirements import MAX_REQUIREMENTS_FILE_BYTES
 from s3.client import MAX_ASSET_COUNT, S3Client
 
 BUCKET = "test-bucket"
-FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "contracts" / "fixtures"
-
-
-def load_valid_requirements() -> dict[str, object]:
-    """Load a fresh canonical requirements fixture for S3 integration tests."""
-    payload = json.loads((FIXTURE_ROOT / "valid" / "minimal.json").read_text(encoding="utf-8"))
-    assert isinstance(payload, dict)
-    return payload
 
 
 @pytest.fixture
@@ -38,18 +30,40 @@ def s3_setup(config: Config):  # type: ignore[no-untyped-def]
         yield S3Client(config, client=raw), raw
 
 
-def test_download_requirements_parses_json(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
-    """requirements.json을 다운로드하고 파싱한다."""
+def test_download_requirements_parses_raw_client_json(
+    s3_setup, tmp_path: Path, job_id: str
+) -> None:  # type: ignore[no-untyped-def]
+    """임의 구조의 원본 Client JSON object를 변경 없이 반환한다."""
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
-    payload = load_valid_requirements()
-    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode())
+    payload = {
+        "요청": "지렁이 게임을 만들어 주세요",
+        "aos": 34,
+        "custom": {"colors": ["green", "black"], "unknown": True},
+    }
+    raw.put_object(
+        Bucket=BUCKET,
+        Key=key,
+        Body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+    )
 
     dest = tmp_path / "requirements.json"
     result = client.download_requirements(BUCKET, key, dest)
 
     assert result == payload
     assert dest.is_file()
+    assert json.loads(dest.read_text(encoding="utf-8")) == payload
+
+
+def test_download_requirements_accepts_empty_object(
+    s3_setup, tmp_path: Path, job_id: str
+) -> None:  # type: ignore[no-untyped-def]
+    """빈 object도 유효한 임의 Client JSON이다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    raw.put_object(Bucket=BUCKET, Key=key, Body=b"{}")
+
+    assert client.download_requirements(BUCKET, key, tmp_path / "r.json") == {}
 
 
 def test_download_requirements_missing_object(s3_setup, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
@@ -70,6 +84,16 @@ def test_download_requirements_invalid_json(s3_setup, tmp_path: Path, job_id: st
         client.download_requirements(BUCKET, key, tmp_path / "r.json")
 
 
+def test_download_requirements_invalid_utf8(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+    """UTF-8이 아닌 문서는 RequirementsReadError로 거부한다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    raw.put_object(Bucket=BUCKET, Key=key, Body=b'{"request":"\xff"}')
+
+    with pytest.raises(RequirementsReadError):
+        client.download_requirements(BUCKET, key, tmp_path / "r.json")
+
+
 def test_download_requirements_non_object_json(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
     """최상위가 객체가 아니면 InvalidRequirementsError가 발생한다 (BR-020)."""
     client, raw = s3_setup
@@ -80,20 +104,16 @@ def test_download_requirements_non_object_json(s3_setup, tmp_path: Path, job_id:
         client.download_requirements(BUCKET, key, tmp_path / "r.json")
 
 
-def test_download_requirements_rejects_schema_violation(
+def test_download_requirements_does_not_enforce_canonical_schema(
     s3_setup, tmp_path: Path, job_id: str
 ) -> None:  # type: ignore[no-untyped-def]
-    """Canonical schema 위반은 InvalidRequirementsError로 분류된다."""
+    """Canonical 필드가 없는 임의 object도 Hermes 입력으로 허용한다."""
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
-    payload = load_valid_requirements()
-    android = payload["android"]
-    assert isinstance(android, dict)
-    android["language"] = "Java"
-    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode())
+    payload = {"android": {"language": "Java"}, "unknownRoot": "preserved"}
+    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode("utf-8"))
 
-    with pytest.raises(InvalidRequirementsError):
-        client.download_requirements(BUCKET, key, tmp_path / "r.json")
+    assert client.download_requirements(BUCKET, key, tmp_path / "r.json") == payload
 
 
 def test_download_requirements_rejects_oversized_document(
@@ -102,11 +122,8 @@ def test_download_requirements_rejects_oversized_document(
     """64 KiB를 초과하는 문서는 파싱 전에 거부한다."""
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
-    payload = load_valid_requirements()
-    client_payload = payload["clientPayload"]
-    assert isinstance(client_payload, dict)
-    client_payload["padding"] = "x" * MAX_REQUIREMENTS_FILE_BYTES
-    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode())
+    payload = {"padding": "x" * MAX_REQUIREMENTS_FILE_BYTES}
+    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode("utf-8"))
 
     with pytest.raises(InvalidRequirementsError):
         client.download_requirements(BUCKET, key, tmp_path / "r.json")

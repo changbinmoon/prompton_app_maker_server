@@ -78,9 +78,11 @@ adb shell monkey -p "${EXPECTED_APPLICATION_ID}" 1
 
 ## Acceptance Criteria
 
-- Backend producer and Worker agree on all contract fields.
+- Backend stores the original UTF-8 Client JSON object at the SQS-referenced key within 64 KiB.
 - States appear in order: ANALYZING, GENERATING_CODE, BUILDING, SUCCESS.
 - Progress values appear in order: 25, 50, 75, 100.
+- Hermes runs before Kiro and records completion or explicit raw fallback without logging Client values.
+- Kiro receives the raw JSON, assets, Android guardrails, and `refined-prompt.md` when available.
 - Visibility extension prevents concurrent duplicate processing.
 - Source archive and non-empty APK exist under the exact Job prefix.
 - `artifactKey` points to the existing APK.
@@ -112,4 +114,4 @@ Handle any retained message by receipt handle on the dedicated test queue. Do no
 
 ## Current Execution Status
 
-Not executed in this Build and Test session. The canonical field-level schema and Worker validation are implemented, but Backend producer normalization and the standalone Hermes interface are still pending. A real run also requires approved AWS mutations plus Opus 5 model usage. These are production-readiness gates, not blockers to the local contract implementation.
+Not executed in this Build and Test session. Raw Client JSON ingress, Hermes v0.20.4 command/retry/output handling, `refined-prompt.md`, and Kiro fallback are implemented and locally tested. A real run still requires the actual Backend endpoint to store/enqueue the raw object, provisioned service-user Hermes configuration, approved AWS mutations, Hermes provider usage, and Opus 5 usage. These remain production-readiness gates.

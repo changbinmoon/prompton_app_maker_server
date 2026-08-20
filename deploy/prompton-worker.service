@@ -32,10 +32,10 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/data/jobs
+ReadWritePaths=/data/jobs /data/hermes
 
-# Android SDK / Gradle 캐시 등 빌드 도구가 쓰기 필요한 경로가 있으면 여기에 추가한다.
-# 예) ReadWritePaths=/data/jobs /opt/android-sdk /home/prompton/.gradle
+# Android SDK / Gradle 캐시 등 빌드 도구가 쓰기 필요한 경로가 있으면 위 목록에 추가한다.
+# 예) ReadWritePaths=/data/jobs /data/hermes /opt/android-sdk /data/gradle
 
 [Install]
 WantedBy=multi-user.target

@@ -8,7 +8,7 @@
 | 언어 | Python 3.12 |
 | 패키지 관리 | uv (비패키지 애플리케이션 모드) |
 | 애플리케이션 코드 위치 | Workspace root |
-| 생성 파일 수 | 33개 (소스 21, 테스트 11, 배포 2, 설정 3) |
+| Follow-up 추가 | `ai/refiner.py`, `tests/test_prompt_refiner.py`; raw/Hermes 통합을 위한 기존 코드·배포·문서 수정 |
 
 ---
 
@@ -27,14 +27,15 @@
 | 파일 | 주요 정의 |
 |------|-----------|
 | `models/enums.py` | `JobStatus`, `ErrorCode`, `JOB_PROGRESS`, `STATUS_MESSAGES`, `TERMINAL_STATUSES`, `ERROR_MESSAGES` |
-| `models/entities.py` | `Config`, `SQSMessage`(+`from_raw` 검증), `JobWorkDir`(+`for_job`), `S3Paths`(+`for_job`) |
+| `models/entities.py` | `Config`(+Hermes path), `SQSMessage`(+`from_raw` 검증), `JobWorkDir`(+`requirements.json`, `refined-prompt.md`), `S3Paths`(+`for_job`) |
+| `models/requirements.py` | Runtime ingress와 분리된 optional canonical reference schema validator |
 | `models/exceptions.py` | `WorkerError` 계층 5종, `classify_error()`, `user_message_for()` |
 
 ### 1.3 설정 (`config/`)
 
 | 파일 | 역할 |
 |------|------|
-| `config/settings.py` | 환경 변수 로드/검증(`load_config`), boto3 재시도 설정(`build_boto_config`) |
+| `config/settings.py` | 환경 변수 로드/검증(`load_config`, `HERMES_CLI_PATH`), boto3 재시도 설정(`build_boto_config`) |
 
 ### 1.4 AWS 클라이언트
 
@@ -48,7 +49,8 @@
 
 | 파일 | 역할 |
 |------|------|
-| `ai/generator.py` | `AIGenerator.generate_code()` - kiro-cli subprocess 호출 + 결과 검증 |
+| `ai/refiner.py` | `PromptRefiner.refine()` - raw JSON guardrail prompt, Hermes one-shot, 3회 retry, atomic output, raw fallback |
+| `ai/generator.py` | `AIGenerator.generate_code()` - refined prompt 또는 raw fallback으로 kiro-cli 호출 + 결과 검증 |
 | `build/builder.py` | `ApkBuilder.build_apk()` - Gradle Wrapper 확보 → assembleDebug → APK 복사 |
 | `worker/visibility_extender.py` | `VisibilityExtender` - daemon thread, 컨텍스트 매니저 지원 |
 | `worker/orchestrator.py` | `WorkerOrchestrator` - 메인 루프, `process_job`, Graceful Shutdown |
@@ -74,14 +76,16 @@
 | `tests/conftest.py` | 공용 fixture (`config`, `job_id`) |
 | `tests/test_config.py` | 11 |
 | `tests/test_sqs_client.py` | 11 |
-| `tests/test_s3_client.py` | 11 (moto) |
+| `tests/test_s3_client.py` | 15 (moto) |
 | `tests/test_dynamo_client.py` | 10 (moto) |
-| `tests/test_orchestrator.py` | 24 |
+| `tests/test_orchestrator.py` | 25 |
 | `tests/test_visibility_extender.py` | 6 |
-| `tests/test_ai_generator.py` | 8 |
+| `tests/test_prompt_refiner.py` | 10 |
+| `tests/test_ai_generator.py` | 9 |
+| `tests/test_requirements_contract.py` | 11 (optional reference) |
 | `tests/test_builder.py` | 7 |
 | `tests/test_cleanup.py` | 17 (cleanup + log_sanitizer) |
-| **합계** | **105** |
+| **합계** | **132** |
 
 ---
 
@@ -108,7 +112,8 @@
 | BR-017 디렉토리 멱등 생성 | `prepare_workdir` (삭제 후 재생성) | `test_process_job_recreates_workdir` |
 | BR-018 24시간 정리 | `cleanup_old_workdirs`, 루프 최상단 호출 | `test_run_performs_cleanup_before_receive` |
 | BR-019 SQS 메시지 검증 | `SQSMessage.from_raw` | `test_receive_message_rejects_*` 4건 |
-| BR-020 requirements.json 검증 | `models.requirements.validate_requirements` + `S3Client.download_requirements` (64 KiB, schema, SDK cross-field) | `tests/test_requirements_contract.py`, S3 schema/oversize tests |
+| BR-020 raw requirements.json 검증 | `S3Client.download_requirements` (64 KiB, UTF-8, JSON object) | raw/empty/invalid UTF-8/non-object/oversize S3 tests |
+| BR-021 Hermes refinement/fallback | `PromptRefiner.refine`, `orchestrator._phase_generating_code`, `AIGenerator.generate_code` | `tests/test_prompt_refiner.py`, refined/raw orchestrator and generator tests |
 
 ---
 
@@ -119,7 +124,7 @@
 | P1 Automatic Retry | `config.settings.build_boto_config` (adaptive, max 3) |
 | P2 Visibility 연장 | `worker/visibility_extender.py` |
 | P3 Idempotent Consumer | `_skip_if_already_done` + `prepare_workdir` |
-| P4 Fail-Fast (외부 프로세스) | `AIGenerator`/`ApkBuilder` 재시도 없음 |
+| P4 External Process Policy | Hermes는 bounded retry 후 fallback; AIGenerator/ApkBuilder는 fail-fast |
 | P5 DLQ | 인프라 설정 (Worker는 실패 시 메시지 유지만 담당) |
 | P6 Process Supervisor | `deploy/prompton-worker.service` `Restart=on-failure` |
 | P7 Graceful Shutdown | `_install_signal_handlers`, `_handle_shutdown`, `TimeoutStopSec=300` |
@@ -137,9 +142,9 @@
 
 | 검사 | 명령 | 결과 |
 |------|------|------|
-| 단위 테스트 | `pytest` | 105 passed |
+| 단위 테스트 | `pytest` | 132 passed, 98 warnings |
 | 린트 | `ruff check .` | All checks passed |
-| 타입 체크 (strict) | `mypy main.py config models sqs s3 dynamo ai build utils worker` | Success, no issues (23 files) |
+| 타입 체크 (strict) | `mypy main.py config models sqs s3 dynamo ai build utils worker` | Success, no issues (25 files) |
 
 ---
 
@@ -149,7 +154,7 @@
 |------|------|------|------|
 | `tests/conftest.py` | 미포함 | 추가 | 공용 fixture(`config`, `job_id`) 중복 제거 |
 | `build_boto_config()` | 위치 미지정 | `config/settings.py` | 3개 클라이언트가 공유하는 설정이므로 config에 배치 |
-| `models/entities.py`의 `Config` | domain-entities.md 필드 7개 | 10개 (+`log_level`, `kiro_cli_path`, `gradle_path`) | tech-stack-decisions.md의 `LOG_LEVEL` 환경 변수 반영, 외부 실행 파일 경로 주입 필요 |
+| `models/entities.py`의 `Config` | domain-entities.md 초기 필드 | `log_level`, `hermes_cli_path`, `kiro_cli_path`, `gradle_path` 추가 | 외부 실행 파일 경로와 운영 로그 설정 주입 필요 |
 | `sqs` 모듈 | `get_queue_attributes` | `get_visibility_timeout(fallback)` | BR-010의 실제 용도(VT 조회)에 맞춘 구체적 인터페이스 |
 | log_sanitizer 40자 패턴 | `[A-Za-z0-9/+=]{40}` | 독립 토큰 + 대소문자 혼재 조건 추가 | 원 패턴은 git SHA 등 정상 문자열까지 마스킹하여 로그 유용성 저하. BR-013 보호 범위는 유지 |
 | `upload_source` 실패 처리 | 미지정 | 예외 대신 경고 로그 후 계속 | APK가 핵심 산출물이며 소스는 디버깅 보조자료 (BR-016) |
@@ -161,7 +166,8 @@
 | 항목 | 현재 구현 | 확정 시 수정 위치 |
 |------|-----------|-------------------|
 | kiro-cli CLI 인터페이스 | `chat --no-interactive --model claude-opus-5 --trust-tools=fs_read,fs_write <prompt>` (2.18.1 검증) | kiro-cli 버전 변경 시 `chat --help`와 모델 목록 호환성 재검증 |
-| requirements.json 스키마 | Draft 2020-12 schema + 64 KiB 제한 + minSdk<=targetSdk 검증 구현 | Backend producer가 동일 schema/fixture를 사용하도록 연동 |
+| S3 Client 요청 계약 | 임의 UTF-8 JSON object, 최대 64 KiB; canonical schema는 optional reference | 실제 Backend 저장소에서 raw object upload/SQS pointer 연결 |
+| Hermes | v0.20.4 `--ignore-rules --toolsets context_engine --oneshot`, host 기본 provider/model | 배포 서비스 사용자의 `HERMES_HOME` 설정·인증과 live 호출 검증 |
 | Android SDK/Gradle 경로 | 환경 변수로 주입 (`env.example` 참고) | `deploy/env.example`, systemd `ReadWritePaths` |
 
 ---

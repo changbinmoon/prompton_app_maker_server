@@ -57,6 +57,7 @@
 |-----------|-----------|
 | requirements.json 다운로드/파싱 실패 | REQUIREMENTS_READ_FAILED |
 | requirements.json 형식 오류 | INVALID_REQUIREMENTS |
+| Hermes 실행/출력 실패 | 오류 코드 없음; 최대 3회 후 Kiro raw fallback |
 | kiro-cli 실행 실패 (exit code != 0) | AI_GENERATION_FAILED |
 | kiro-cli 파일/경로 오류 | AI_GENERATION_FAILED |
 | Gradle 빌드 실패 | BUILD_FAILED |
@@ -93,6 +94,8 @@
   - 작업 시작
   - 요구조건 다운로드 완료
   - 에셋 다운로드 완료 (있을 경우)
+  - Hermes 프롬프트 정제 시작
+  - Hermes 프롬프트 정제 완료 또는 원본 JSON fallback
   - 코드 생성 시작/완료
   - APK 빌드 시작/완료
   - 작업 완료 또는 실패
@@ -150,9 +153,20 @@
 - **실패 시**: INVALID_REQUIREMENTS 에러
 
 ### BR-020: requirements.json 유효성
-- **최대 크기**: 64 KiB
-- **구조 검증**: `contracts/requirements.schema.json` Draft 2020-12 schema 적용
-- **필수 root**: schemaVersion, clientPayload, android, assets
-- **추가 검증**: minSdk <= targetSdk
-- **실패 시**: INVALID_REQUIREMENTS 에러
-- **보안**: 오류 상세에는 untrusted Client 값 대신 JSON path와 실패 rule만 기록
+- **입력**: Backend가 S3에 저장한 원본 Client JSON object
+- **최대 크기**: 64 KiB (JSON 파싱 전에 검사)
+- **인코딩**: UTF-8
+- **구조 검증**: 유효한 JSON이며 최상위가 object
+- **허용 범위**: 임의 root/nested 필드 허용; canonical schema는 runtime ingress에 적용하지 않음
+- **실패 시**: INVALID_REQUIREMENTS 또는 REQUIREMENTS_READ_FAILED
+- **보존**: Worker와 Hermes는 원본 JSON 필드를 변경하지 않음
+
+### BR-021: Hermes prompt refinement와 Kiro fallback
+- **순서**: raw JSON 다운로드 및 assets 처리 후 Hermes, 그 다음 Kiro
+- **호출**: `--ignore-rules --toolsets context_engine --oneshot`
+- **Android guardrail**: Kotlin, Jetpack Compose, API level 21-35 또는 26/35 기본값, valid applicationId 보존 또는 Job ID 기반 기본값
+- **출력**: non-empty, NUL 없음, UTF-8 64 KiB 이하 text를 `refined-prompt.md`에 atomic 저장
+- **재시도**: 최초 호출 포함 최대 3회, 실패 후 1초와 2초 대기
+- **로그 보안**: raw JSON과 Hermes stdout/stderr를 로그에 기록하지 않음
+- **fallback**: 모든 시도 실패 시 원본 JSON, assets, 동일 guardrail로 Kiro를 계속 실행
+- **실패 분류**: Hermes exhaustion은 Job 실패가 아니며, 이후 Kiro 실패만 AI_GENERATION_FAILED

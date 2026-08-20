@@ -22,6 +22,7 @@ uv run pytest \
   tests/test_s3_client.py \
   tests/test_dynamo_client.py \
   tests/test_orchestrator.py \
+  tests/test_prompt_refiner.py \
   tests/test_ai_generator.py
 ```
 
@@ -51,18 +52,34 @@ Acceptance rules:
 - `assetsPrefix` is a string and may point to an empty prefix.
 - Invalid messages are not deleted by the Worker.
 
-## Requirements Contract
+## Raw Client Requirements Contract
 
-The Worker now enforces the canonical v1 contract:
-- Maximum UTF-8 document size of 64 KiB
-- JSON object with `schemaVersion`, `clientPayload`, `android`, and `assets`
-- Draft 2020-12 schema at `contracts/requirements.schema.json`
-- Unknown-field rejection outside arbitrary `clientPayload`
-- Valid application ID, SDK range 21-35, Kotlin, and Jetpack Compose
-- At most five basename-only PNG/JPEG asset descriptors
-- Custom `minSdk <= targetSdk` cross-field validation
+The Worker runtime accepts the original Client JSON object:
+- Maximum UTF-8 document size of 64 KiB, checked before parsing
+- Valid UTF-8 and JSON syntax
+- Top-level object
+- Arbitrary root and nested fields preserved
+- No runtime enforcement of the optional canonical envelope schema
 
-Shared valid and invalid fixtures live under `contracts/fixtures/`. Worker consumer tests execute every fixture. Backend producer CI still needs to consume the same schema and fixtures before live E2E or production readiness can be claimed.
+`tests/test_s3_client.py` proves raw objects, Unicode, empty objects, and former schema-invalid
+objects are accepted while malformed, non-object, non-UTF-8, and oversized inputs are rejected.
+
+The Draft 2020-12 schema and fixtures under `contracts/` remain optional reference artifacts.
+`tests/test_requirements_contract.py` validates them independently and does not represent the S3
+consumer boundary.
+
+## Hermes and Kiro Prompt Contract
+
+- Hermes command: `--ignore-rules --toolsets context_engine --oneshot {prompt}`
+- Provider/model: Hermes host configuration
+- Android guardrails: Kotlin, Jetpack Compose, API level range/defaults, Job-based application ID
+- Output: non-empty, no NUL, maximum 64 KiB, atomic `refined-prompt.md`
+- Retry: three total attempts with 1-second and 2-second delays
+- Fallback: Kiro reads original JSON and assets with the same guardrails
+- Logging: Client JSON and Hermes stdout/stderr are not logged
+
+`tests/test_prompt_refiner.py`, `tests/test_ai_generator.py`, and `tests/test_orchestrator.py`
+validate command construction, retry, output rejection, refined prompt use, and raw fallback.
 
 ## DynamoDB Contract
 
@@ -123,4 +140,4 @@ A prior `generate` assumption was rejected by the real CLI with exit status 2 an
 
 ## Contract Release Gate
 
-Contract status is partially verified. The versioned schema, shared fixtures, and Worker consumer checks are implemented alongside SQS, DynamoDB, S3 path, and CLI checks. Production release remains blocked until the Backend producer validates the same contract and live E2E passes.
+Contract status is locally verified for raw S3 ingress, Hermes command/retry/output behavior, Kiro fallback, SQS, DynamoDB, and S3 paths. Production release remains blocked until the actual Backend stores the raw object and enqueues its pointer, the service-user Hermes host configuration is provisioned, and live E2E passes.
