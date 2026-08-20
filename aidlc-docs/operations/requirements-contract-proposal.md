@@ -1,10 +1,18 @@
 # requirements.json 계약 제안서
 
+## 현재 상태
+
+- Canonical v1 schema와 Worker validation은 구현 완료됐다.
+- 원본 Client 임의 JSON은 `clientPayload`에 보존한다.
+- Backend는 Android 필드를 검증·보정하여 canonical JSON을 생성해야 한다.
+- Hermes는 Worker에서 Kiro 전에 실행하는 방향이지만 standalone 경로·인자와 재시도/fallback이 미정이라 구현되지 않았다.
+- 실제 source of truth는 `contracts/requirements.schema.json`과 `contracts/README.md`다.
+
 ## 결론
 
-MVP 권장안은 기존 Client API를 유지하고 Backend Lambda가 자유 텍스트 입력을 versioned `requirements.json`으로 정규화하는 방식이다.
+Client의 임의 JSON을 Backend가 canonical envelope로 감싸고 정규화된 Android 정책과 asset metadata를 추가한다. Worker는 canonical JSON을 엄격히 검증한 뒤 사용한다.
 
-현재 계약 불일치:
+구현 전 확인된 계약 불일치:
 
 | 영역 | 현재 Backend 요구사항 | 현재 Worker |
 |---|---|---|
@@ -18,26 +26,27 @@ MVP 권장안은 기존 Client API를 유지하고 Backend Lambda가 자유 텍�
 
 | 주체 | 책임 |
 |---|---|
-| Client | 자유 텍스트 요구사항과 선택적 이미지 업로드 |
-| Backend Lambda | 입력 검증, Job ID 생성, schemaVersion 및 Android 정책 주입, canonical JSON 저장 |
-| AI Worker | schemaVersion과 필드 검증, JSON을 untrusted data로 취급, kiro-cli에 전달 |
+| Client | 임의 JSON 요구사항과 선택적 이미지 업로드 |
+| Backend Lambda | 원본 JSON 보존, 입력 검증, Job ID 생성, schemaVersion 및 Android 정책 주입, canonical JSON 저장 |
+| AI Worker | schemaVersion과 필드 검증, JSON을 untrusted data로 취급, Hermes/Kiro 파이프라인에 전달 |
 | Test/CI | 동일 JSON Schema로 producer와 consumer를 모두 검증 |
 
-Client가 SDK 버전, application ID 같은 빌드 정책을 임의로 정하지 않게 하고 Backend 설정이 결정하는 것을 권장한다.
+Client가 보낸 valid applicationId와 API level은 유지할 수 있지만 Backend가 canonical 정책을 검증·보정한다.
 
-## 권장 v1 예시
+## 확정 v1 예시
 
 ```json
 {
   "schemaVersion": "1.0",
-  "request": {
-    "prompt": "지렁이 게임 Android 앱을 만들어주세요.",
-    "locale": "ko-KR"
+  "clientPayload": {
+    "requirements": "지렁이 게임 Android 앱을 만들어주세요.",
+    "locale": "ko-KR",
+    "aosVersion": 26
   },
   "android": {
     "applicationId": "com.prompton.generated.j1234567890abcdef",
     "minSdk": 26,
-    "targetSdk": 35,
+    "targetSdk": 26,
     "language": "Kotlin",
     "uiToolkit": "Jetpack Compose"
   },
@@ -51,7 +60,7 @@ Client가 SDK 버전, application ID 같은 빌드 정책을 임의로 정하지
 }
 ```
 
-`applicationId`, `minSdk`, `targetSdk`, `language`, `uiToolkit`은 Client 요청값이 아니라 Backend의 승인된 서버 설정에서 생성하는 것을 권장한다.
+Backend는 valid Client 값을 유지하고 invalid 또는 누락된 값을 승인된 기본값으로 보정한다.
 
 ## v1 필드 규칙
 
@@ -60,16 +69,13 @@ Client가 SDK 버전, application ID 같은 빌드 정책을 임의로 정하지
 | 필드 | 필수 | 규칙 |
 |---|---|---|
 | `schemaVersion` | Yes | 정확히 `1.0` |
-| `request` | Yes | 사용자 요구사항 객체 |
-| `android` | Yes | Backend가 결정한 Android 빌드 정책 |
+| `clientPayload` | Yes | 원본 Client JSON 객체 |
+| `android` | Yes | Backend가 검증·보정한 Android 빌드 정책 |
 | `assets` | Yes | 없으면 빈 배열, 최대 5개 |
 
-### request
+### clientPayload
 
-| 필드 | 필수 | 규칙 |
-|---|---|---|
-| `prompt` | Yes | UTF-8 문자열, trim 후 1~10,000자 |
-| `locale` | Yes | BCP 47 형태, MVP 기본값 `ko-KR` |
+`clientPayload`는 임의 JSON 객체다. Worker는 내부 필드를 해석하지 않으며 전체 requirements 문서의 64 KiB 제한만 적용한다.
 
 ### android
 

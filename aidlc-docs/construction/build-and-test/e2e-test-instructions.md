@@ -112,4 +112,4 @@ Handle any retained message by receipt handle on the dedicated test queue. Do no
 
 ## Current Execution Status
 
-Not executed in this Build and Test session. The field-level requirements contract is still unresolved, and a real run requires approved AWS mutations plus Opus 5 model usage. This is a production-readiness gate, not a blocker to generating and approving the Build and Test instructions.
+Not executed in this Build and Test session. The canonical field-level schema and Worker validation are implemented, but Backend producer normalization and the standalone Hermes interface are still pending. A real run also requires approved AWS mutations plus Opus 5 model usage. These are production-readiness gates, not blockers to the local contract implementation.

@@ -17,6 +17,7 @@ Run the current executable contract tests:
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --extra dev --frozen
 uv run pytest \
+  tests/test_requirements_contract.py \
   tests/test_sqs_client.py \
   tests/test_s3_client.py \
   tests/test_dynamo_client.py \
@@ -52,16 +53,16 @@ Acceptance rules:
 
 ## Requirements Contract
 
-Current implementation guarantees only:
-- UTF-8 readable content
-- Valid JSON
-- Top level is an object
+The Worker now enforces the canonical v1 contract:
+- Maximum UTF-8 document size of 64 KiB
+- JSON object with `schemaVersion`, `clientPayload`, `android`, and `assets`
+- Draft 2020-12 schema at `contracts/requirements.schema.json`
+- Unknown-field rejection outside arbitrary `clientPayload`
+- Valid application ID, SDK range 21-35, Kotlin, and Jetpack Compose
+- At most five basename-only PNG/JPEG asset descriptors
+- Custom `minSdk <= targetSdk` cross-field validation
 
-The field-level `requirements.json` schema is unresolved and must be agreed with the Backend team before live E2E or production readiness can be claimed. Once agreed:
-1. Store a versioned JSON Schema in the repository.
-2. Add valid, boundary, missing-field, unknown-field, and incompatible-version fixtures.
-3. Validate the same schema in both Backend producer and Worker consumer CI.
-4. Add migration and backward-compatibility rules before introducing version 2.
+Shared valid and invalid fixtures live under `contracts/fixtures/`. Worker consumer tests execute every fixture. Backend producer CI still needs to consume the same schema and fixtures before live E2E or production readiness can be claimed.
 
 ## DynamoDB Contract
 
@@ -122,4 +123,4 @@ A prior `generate` assumption was rejected by the real CLI with exit status 2 an
 
 ## Contract Release Gate
 
-Contract status is partially verified. SQS, DynamoDB, S3 path, and CLI contracts have executable checks. Production release remains blocked until the field-level `requirements.json` contract is versioned and tested by both producer and consumer.
+Contract status is partially verified. The versioned schema, shared fixtures, and Worker consumer checks are implemented alongside SQS, DynamoDB, S3 path, and CLI checks. Production release remains blocked until the Backend producer validates the same contract and live E2E passes.

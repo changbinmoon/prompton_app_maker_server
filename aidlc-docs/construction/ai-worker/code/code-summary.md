@@ -108,7 +108,7 @@
 | BR-017 디렉토리 멱등 생성 | `prepare_workdir` (삭제 후 재생성) | `test_process_job_recreates_workdir` |
 | BR-018 24시간 정리 | `cleanup_old_workdirs`, 루프 최상단 호출 | `test_run_performs_cleanup_before_receive` |
 | BR-019 SQS 메시지 검증 | `SQSMessage.from_raw` | `test_receive_message_rejects_*` 4건 |
-| BR-020 requirements.json 검증 | `download_requirements` JSON 파싱 검증 | `test_download_requirements_invalid_json` |
+| BR-020 requirements.json 검증 | `models.requirements.validate_requirements` + `S3Client.download_requirements` (64 KiB, schema, SDK cross-field) | `tests/test_requirements_contract.py`, S3 schema/oversize tests |
 
 ---
 
@@ -161,7 +161,7 @@
 | 항목 | 현재 구현 | 확정 시 수정 위치 |
 |------|-----------|-------------------|
 | kiro-cli CLI 인터페이스 | `chat --no-interactive --model claude-opus-5 --trust-tools=fs_read,fs_write <prompt>` (2.18.1 검증) | kiro-cli 버전 변경 시 `chat --help`와 모델 목록 호환성 재검증 |
-| requirements.json 스키마 | JSON 객체 여부만 검증 | `s3/client.py::download_requirements` 검증 로직 확장 |
+| requirements.json 스키마 | Draft 2020-12 schema + 64 KiB 제한 + minSdk<=targetSdk 검증 구현 | Backend producer가 동일 schema/fixture를 사용하도록 연동 |
 | Android SDK/Gradle 경로 | 환경 변수로 주입 (`env.example` 참고) | `deploy/env.example`, systemd `ReadWritePaths` |
 
 ---

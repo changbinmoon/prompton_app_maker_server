@@ -71,20 +71,31 @@
 - **Runbook**: `aidlc-docs/operations/operational-test-plan.md`
 - **Operational Test Status**: NOT STARTED
 - **Reason**: 실제 AWS 변경과 Opus 5 비용이 발생하므로 격리 리소스 및 명시적 테스트 승인 필요
-- **Primary Blockers**: field-level `requirements.json` 계약, 테스트 EC2/IAM/Queue-DLQ 격리 검증, Java/Android Gradle Plugin 호환 조합
+- **Primary Blockers**: Backend producer canonical 변환, standalone Hermes 인터페이스, 테스트 EC2/IAM/Queue-DLQ 격리 검증, Java/Android Gradle Plugin 호환 조합
 - **Remote Push Status**: PUSHED (verified 2026-08-20T07:40:54Z)
 - **Remote Branch**: `origin/feature/ai-worker-operational-readiness`
 - **Verified Delivery Base Commit**: `6ce19f9247304094f0d1e7f4c65ec99b43196181`
 
 ## Requirements Contract Decision Status
-- **Reviewed At**: 2026-08-20T07:53:44Z
+- **Reviewed At**: 2026-08-20T08:11:17Z
 - **Original Answers**: Complete (6/6)
-- **Status**: CLARIFICATION REQUIRED
-- **Contradiction**: Q2 Worker-owned SDK vs Q3 Client AOS-derived minSdk
-- **Ambiguities**: Hermes execution boundary, Client JSON shape, AOS version representation, targetSdk and applicationId ownership
-- **Clarification File**: `aidlc-docs/operations/requirements-contract-clarification-questions.md`
-- **Implementation Gate**: JSON Schema and Worker validation blocked until 5 clarification answers are complete
-- **Implementation Detail Status**: ADDITIONAL ANSWERS REQUIRED
-- **Verified Runtime Gap**: `kiro-cli agent list`에 `hermes` agent 없음
-- **Pending Details**: canonical envelope, SDK derivation, Android field normalization, Hermes interface/output/failure policy
-- **Implementation Questions**: `aidlc-docs/operations/requirements-contract-implementation-questions.md`
+- **Clarification Answers**: Complete (5/5)
+- **Implementation Answers**: Partial - schema decisions complete, Hermes details incomplete
+- **Schema Status**: IMPLEMENTED - `contracts/requirements.schema.json`
+- **Fixture Status**: IMPLEMENTED - 2 valid, 6 invalid
+- **Worker Validation Status**: IMPLEMENTED - schema, 64 KiB, minSdk<=targetSdk
+- **Backend Producer Status**: PENDING - normalization and shared fixture execution
+- **Hermes Status**: BLOCKED - standalone path/arguments and retry/fallback details missing
+- **Contract README**: `contracts/README.md`
+- **Decision Files**: `aidlc-docs/operations/requirements-contract-questions.md`, `requirements-contract-clarification-questions.md`, `requirements-contract-implementation-questions.md`
+
+## Requirements Contract Implementation Results
+- **Completed At**: 2026-08-20T08:11:17Z
+- **Schema**: Draft 2020-12 v1, canonical root and strict Android/assets fields
+- **Fixtures**: 2 valid, 7 invalid
+- **Worker Enforcement**: 64 KiB limit, schema validation, minSdk<=targetSdk
+- **Dependency**: `jsonschema==4.25.1`
+- **Validation**: 118 passed, Ruff passed, mypy strict passed (24 source files)
+- **Consumer Status**: COMPLETE
+- **Producer Status**: Backend implementation pending
+- **Hermes Status**: Pending standalone CLI path/arguments and retry/fallback values

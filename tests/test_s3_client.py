@@ -15,9 +15,18 @@ from models.exceptions import (
     InvalidRequirementsError,
     RequirementsReadError,
 )
+from models.requirements import MAX_REQUIREMENTS_FILE_BYTES
 from s3.client import MAX_ASSET_COUNT, S3Client
 
 BUCKET = "test-bucket"
+FIXTURE_ROOT = Path(__file__).resolve().parents[1] / "contracts" / "fixtures"
+
+
+def load_valid_requirements() -> dict[str, object]:
+    """Load a fresh canonical requirements fixture for S3 integration tests."""
+    payload = json.loads((FIXTURE_ROOT / "valid" / "minimal.json").read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
 
 
 @pytest.fixture
@@ -33,12 +42,13 @@ def test_download_requirements_parses_json(s3_setup, tmp_path: Path, job_id: str
     """requirements.json을 다운로드하고 파싱한다."""
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
-    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps({"appName": "demo"}).encode())
+    payload = load_valid_requirements()
+    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode())
 
     dest = tmp_path / "requirements.json"
     result = client.download_requirements(BUCKET, key, dest)
 
-    assert result == {"appName": "demo"}
+    assert result == payload
     assert dest.is_file()
 
 
@@ -65,6 +75,38 @@ def test_download_requirements_non_object_json(s3_setup, tmp_path: Path, job_id:
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
     raw.put_object(Bucket=BUCKET, Key=key, Body=b"[1, 2, 3]")
+
+    with pytest.raises(InvalidRequirementsError):
+        client.download_requirements(BUCKET, key, tmp_path / "r.json")
+
+
+def test_download_requirements_rejects_schema_violation(
+    s3_setup, tmp_path: Path, job_id: str
+) -> None:  # type: ignore[no-untyped-def]
+    """Canonical schema 위반은 InvalidRequirementsError로 분류된다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    payload = load_valid_requirements()
+    android = payload["android"]
+    assert isinstance(android, dict)
+    android["language"] = "Java"
+    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode())
+
+    with pytest.raises(InvalidRequirementsError):
+        client.download_requirements(BUCKET, key, tmp_path / "r.json")
+
+
+def test_download_requirements_rejects_oversized_document(
+    s3_setup, tmp_path: Path, job_id: str
+) -> None:  # type: ignore[no-untyped-def]
+    """64 KiB를 초과하는 문서는 파싱 전에 거부한다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    payload = load_valid_requirements()
+    client_payload = payload["clientPayload"]
+    assert isinstance(client_payload, dict)
+    client_payload["padding"] = "x" * MAX_REQUIREMENTS_FILE_BYTES
+    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode())
 
     with pytest.raises(InvalidRequirementsError):
         client.download_requirements(BUCKET, key, tmp_path / "r.json")

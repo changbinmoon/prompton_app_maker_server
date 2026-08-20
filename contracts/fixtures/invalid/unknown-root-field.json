@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "unknown root field 요청"
+  },
+  "android": {
+    "applicationId": "com.example.invalid",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": [],
+  "unknownField": true
+}

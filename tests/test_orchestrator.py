@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -97,9 +98,21 @@ class FakeS3Client:
     ) -> dict[str, Any]:
         if self.download_error is not None:
             raise self.download_error
+        payload: dict[str, Any] = {
+            "schemaVersion": "1.0",
+            "clientPayload": {"requirements": "demo"},
+            "android": {
+                "applicationId": "com.prompton.generated.j1234567890abcdef",
+                "minSdk": 26,
+                "targetSdk": 35,
+                "language": "Kotlin",
+                "uiToolkit": "Jetpack Compose",
+            },
+            "assets": [],
+        }
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        dest_path.write_text('{"appName": "demo"}', encoding="utf-8")
-        return {"appName": "demo"}
+        dest_path.write_text(json.dumps(payload), encoding="utf-8")
+        return payload
 
     def download_assets(self, bucket: str, prefix: str, dest_dir: Path) -> list[Path]:
         dest_dir.mkdir(parents=True, exist_ok=True)

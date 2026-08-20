@@ -150,6 +150,9 @@
 - **실패 시**: INVALID_REQUIREMENTS 에러
 
 ### BR-020: requirements.json 유효성
-- **검증**: JSON 형식 파싱 가능 여부
+- **최대 크기**: 64 KiB
+- **구조 검증**: `contracts/requirements.schema.json` Draft 2020-12 schema 적용
+- **필수 root**: schemaVersion, clientPayload, android, assets
+- **추가 검증**: minSdk <= targetSdk
 - **실패 시**: INVALID_REQUIREMENTS 에러
-- **스키마 상세**: Backend 팀과 협의 후 확정 (현재 미정)
+- **보안**: 오류 상세에는 untrusted Client 값 대신 JSON path와 실패 rule만 기록

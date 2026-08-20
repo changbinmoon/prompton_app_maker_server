@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "asset 경로가 잘못된 요청"
+  },
+  "android": {
+    "applicationId": "com.example.invalidasset",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": [
+    {
+      "fileName": "../secret.png",
+      "contentType": "image/png"
+    }
+  ]
+}

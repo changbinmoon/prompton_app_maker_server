@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "간단한 할 일 관리 Android 앱을 만들어주세요."
+  },
+  "android": {
+    "applicationId": "com.prompton.generated.j1234567890abcdef",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": []
+}

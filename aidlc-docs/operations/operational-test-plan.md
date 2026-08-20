@@ -132,7 +132,7 @@ uv run ruff check .
 uv run mypy main.py config models sqs s3 dynamo ai build utils worker
 ```
 
-**통과 조건**: 105 tests passed, Ruff 통과, mypy strict 통과, compile 성공.
+**통과 조건**: 118 tests passed, Ruff 통과, mypy strict 통과, compile 성공.
 
 ## Gate 3: AWS 및 IAM 비파괴 preflight
 
@@ -248,10 +248,11 @@ aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME"
 
 ## 현재 차단 요소
 
-1. **BLOCKER**: field-level `requirements.json` 스키마와 대표 성공 fixture 미확정
-2. **BLOCKER**: 실제 테스트 EC2, IAM Role, Queue/DLQ 격리 방식 미검증
-3. **BLOCKER**: 실제 Java/Android Gradle Plugin 호환 조합 미확정
-4. **APPROVAL REQUIRED**: AWS 리소스 변경과 Opus 5 사용 비용
-5. **PENDING**: live E2E, performance baseline, dependency/Bandit/IAM/systemd security 검증
+1. **BLOCKER**: Backend producer의 canonical JSON 정규화와 shared schema/fixture 검증 미구현
+2. **BLOCKER**: standalone Hermes 실행 경로·인자 및 재시도/fallback 정책 미확정
+3. **BLOCKER**: 실제 테스트 EC2, IAM Role, Queue/DLQ 격리 방식 미검증
+4. **BLOCKER**: 실제 Java/Android Gradle Plugin 호환 조합 미확정
+5. **APPROVAL REQUIRED**: AWS 리소스 변경과 Opus 5 사용 비용
+6. **PENDING**: live E2E, performance baseline, dependency/Bandit/IAM/systemd security 검증
 
 이 차단 요소가 해소되기 전에는 production activation을 승인하지 않는다.

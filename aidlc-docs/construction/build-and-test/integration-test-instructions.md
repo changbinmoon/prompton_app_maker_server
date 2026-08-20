@@ -68,7 +68,7 @@ aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME"
 
 ### Setup
 
-Use a backend-approved payload instead of the minimal placeholder below before invoking the model:
+Use a Backend-produced canonical v1 payload before invoking the model:
 
 ```bash
 set -euo pipefail
@@ -76,8 +76,18 @@ JOB_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 REQ_FILE="/tmp/requirements-${JOB_ID}.json"
 cat > "$REQ_FILE" <<'JSON'
 {
-  "appName": "integration-smoke-test",
-  "description": "Backend-approved deterministic smoke application"
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "Backend-approved deterministic smoke application"
+  },
+  "android": {
+    "applicationId": "com.prompton.integration.smoke",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": []
 }
 JSON
 

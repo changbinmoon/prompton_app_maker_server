@@ -84,7 +84,7 @@ Targeted verification after the correction:
 
 ## Remaining Risks and Release Gates
 
-1. The field-level `requirements.json` schema is not defined. Only valid JSON-object structure is enforced.
+1. The canonical `requirements.json` v1 schema, fixtures, and Worker validation are implemented. Backend producer normalization/validation and a shared versioned contract package are still pending.
 2. A live success-path Job has not exercised real SQS, S3, DynamoDB, Opus 5, Gradle Wrapper, and APK upload together.
 3. Performance characteristics are unmeasured on the target EC2 instance.
 4. Deployment template Java paths reference Java 17 while the validation host currently runs Java 21; align with the generated Android Gradle Plugin.

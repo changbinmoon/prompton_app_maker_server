@@ -25,6 +25,7 @@ from models.exceptions import (
     InvalidRequirementsError,
     RequirementsReadError,
 )
+from models.requirements import MAX_REQUIREMENTS_FILE_BYTES, validate_requirements
 
 if TYPE_CHECKING:
     from models.entities import Config
@@ -86,6 +87,21 @@ class S3Client:
             ) from exc
 
         try:
+            file_size = dest_path.stat().st_size
+        except OSError as exc:
+            raise RequirementsReadError(
+                detail=f"requirements.json 파일 정보 조회 실패: {exc}"
+            ) from exc
+
+        if file_size > MAX_REQUIREMENTS_FILE_BYTES:
+            raise InvalidRequirementsError(
+                detail=(
+                    "requirements.json 크기 제한 초과 "
+                    f"(max={MAX_REQUIREMENTS_FILE_BYTES} bytes)"
+                )
+            )
+
+        try:
             content = dest_path.read_text(encoding="utf-8")
             payload = json.loads(content)
         except (OSError, UnicodeDecodeError) as exc:
@@ -102,7 +118,8 @@ class S3Client:
                 detail="requirements.json 최상위가 JSON 객체가 아닙니다"
             )
 
-        logger.info("requirements.json 다운로드 완료 (key=%s)", key)
+        validate_requirements(payload)
+        logger.info("requirements.json 다운로드 및 계약 검증 완료 (key=%s)", key)
         return payload
 
     def download_assets(self, bucket: str, prefix: str, dest_dir: Path) -> list[Path]:

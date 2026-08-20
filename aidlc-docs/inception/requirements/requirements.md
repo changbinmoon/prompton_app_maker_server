@@ -355,9 +355,10 @@ jobs/{jobId}/
 
 | 항목 | 현재 상태 | 비고 |
 |------|-----------|------|
-| requirements.json 스키마 | 미정 | Backend 팀과 협의 필요 |
+| requirements.json 스키마 | v1 확정 및 Worker 구현 완료 | `contracts/requirements.schema.json`, Backend producer 적용 필요 |
 | 로그 및 모니터링 수준 | 미정 | 1차 구현 후 결정 가능 |
-| kiro-cli 호출 방식 상세 | 추후 정의 | CLI 인터페이스 확인 필요 |
+| kiro-cli 호출 방식 상세 | 2.18.1 `chat --no-interactive` 검증 완료 | `claude-opus-5`, fs_read/fs_write 제한 |
+| Hermes prompt refinement | 인터페이스 미정 | standalone 실행 경로/인자, 재시도·fallback 확정 필요 |
 
 ---
 

@@ -23,7 +23,7 @@ C) Client 임의 JSON root를 유지하고 Backend가 `_prompton` 예약 객체�
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: A
 
 ## Question 2
 Client가 API level 하나만 보낼 때 minSdk와 targetSdk를 어떻게 계산할 것인가?
@@ -36,7 +36,7 @@ C) Client가 minSdk와 targetSdk를 각각 보내고 Backend가 범위와 순서
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: B
 
 ## Question 3
 Client의 applicationId, language, uiToolkit을 어떤 규칙으로 검증·보정할 것인가?
@@ -49,7 +49,7 @@ C) applicationId만 Backend가 보정하고 language와 uiToolkit은 여러 enum
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: A
 
 ## Question 4
 Worker가 Hermes를 어떤 실제 인터페이스로 호출할 것인가?
@@ -62,7 +62,7 @@ C) 원격 Hermes HTTP API를 호출한다. 선택 시 `[Answer]:` 뒤에 endpoin
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: B
 
 ## Question 5
 Hermes의 출력은 무엇이며 kiro-cli에 어떻게 전달할 것인가?
@@ -75,7 +75,7 @@ C) Hermes stdout을 Worker가 별도 파일 없이 Kiro의 첫 입력 문자열�
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: A
 
 ## Question 6
 Hermes 실행이 실패하거나 유효한 prompt를 만들지 못하면 어떻게 처리할 것인가?
@@ -88,4 +88,4 @@ C) Hermes를 정해진 횟수만큼 재시도한 뒤 실패 처리한다. 선택
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: X = Hermes를 정해진 횟수만큼 재시도한 뒤 Kiro 생성을 계속하고 경고 로그를 남긴다.

@@ -26,8 +26,8 @@ uv run pytest
 ```
 
 Expected result for the current revision:
-- Collected: 105
-- Passed: 105
+- Collected: 118
+- Passed: 118
 - Failed: 0
 - Errors: 0
 
@@ -37,6 +37,7 @@ The suite can emit botocore `datetime.utcnow()` deprecation warnings through mot
 
 ```bash
 uv run pytest tests/test_config.py
+uv run pytest tests/test_requirements_contract.py
 uv run pytest tests/test_sqs_client.py
 uv run pytest tests/test_s3_client.py
 uv run pytest tests/test_dynamo_client.py
@@ -80,7 +81,7 @@ Report location: `test-results/unit/pytest.xml`.
 
 ## Coverage Measurement
 
-Statement or branch coverage is not currently configured, and no coverage percentage is claimed. The test gate is behavior-based: all 105 tests, lint, and strict type checking must pass. If a numeric coverage gate is introduced, add a pinned `pytest-cov` dependency through an explicit dependency-update change and record the agreed threshold before enforcing it.
+Statement or branch coverage is not currently configured, and no coverage percentage is claimed. The test gate is behavior-based: all 118 tests, lint, and strict type checking must pass. If a numeric coverage gate is introduced, add a pinned `pytest-cov` dependency through an explicit dependency-update change and record the agreed threshold before enforcing it.
 
 ## Failure Triage
 
@@ -88,7 +89,7 @@ Statement or branch coverage is not currently configured, and no coverage percen
 2. Determine whether the failure is code, test isolation, dependency drift, or environment setup.
 3. For moto failures, confirm the locked boto3, botocore, and moto versions were installed with `--frozen`.
 4. For subprocess tests, verify they use `RunRecorder` or `GradleStub`; unit tests must not call a real model or real Gradle build.
-5. Fix the cause, rerun the focused file, then rerun all 105 tests.
+5. Fix the cause, rerun the focused file, then rerun all 118 tests.
 6. Run Ruff and mypy after every code change:
 
 ```bash
