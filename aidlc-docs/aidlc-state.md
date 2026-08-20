@@ -84,3 +84,7 @@
 - **Ambiguities**: Hermes execution boundary, Client JSON shape, AOS version representation, targetSdk and applicationId ownership
 - **Clarification File**: `aidlc-docs/operations/requirements-contract-clarification-questions.md`
 - **Implementation Gate**: JSON Schema and Worker validation blocked until 5 clarification answers are complete
+- **Implementation Detail Status**: ADDITIONAL ANSWERS REQUIRED
+- **Verified Runtime Gap**: `kiro-cli agent list`에 `hermes` agent 없음
+- **Pending Details**: canonical envelope, SDK derivation, Android field normalization, Hermes interface/output/failure policy
+- **Implementation Questions**: `aidlc-docs/operations/requirements-contract-implementation-questions.md`

@@ -24,7 +24,7 @@ C) Client가 minSdk와 targetSdk를 직접 보내고 Backend와 Worker는 허용
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: X = Client가 AOS 버전을 보내고 Backend가 이를 검증 매핑하여 minSDK, targetSDK를 기록한다. Client로 부터 유효한 값을 받지 못 한 경우 기본값으로 진행
 
 ## Ambiguity 1: Hermes 실행 경계
 
@@ -41,7 +41,7 @@ C) Worker가 requirements.json을 받은 뒤 kiro-cli 호출 전에 Hermes를 �
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: C
 
 ## Ambiguity 2: Client JSON 형태
 
@@ -58,7 +58,7 @@ C) Client가 임의 JSON을 보내고 Hermes가 해석하여 canonical JSON으�
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: X = Client가 임의 JSON을 보내고 Hermes가 해석하여 프롬프트를 작성한다.
 
 ## Ambiguity 3: AOS 버전 표현
 
@@ -75,7 +75,7 @@ C) `{"osVersion": "14", "apiLevel": 34}`처럼 둘 다 보내고 일치 여부�
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: B
 
 ## Ambiguity 4: applicationId와 기술 스택
 
@@ -92,4 +92,4 @@ C) Client가 세 값을 보내고 Backend와 Worker가 검증한다.
 
 X) Other (please describe after [Answer]: tag below)
 
-[Answer]:
+[Answer]: X = Client가 세 값을 보내고 유효하지 않은 경우 Backend가 적절히 생성한다.
