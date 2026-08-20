@@ -58,7 +58,7 @@
 - [x] Run targeted tests for S3 ingress, prompt refiner, generator, config, and orchestrator.
 - [x] Run the full pytest suite, Ruff, strict mypy, compile, lock, JSON/Markdown syntax, and `git diff --check` validations.
 - [x] Obtain an independent code review and resolve blocking findings.
-- [ ] Stage only intended files, commit to `feature/ai-worker-operational-readiness`, push, and verify local/remote SHA equality and a clean worktree.
+- [x] Stage only intended files, commit to `feature/ai-worker-operational-readiness`, push, and verify local/remote SHA equality and a clean worktree.
 
 ## Traceability
 

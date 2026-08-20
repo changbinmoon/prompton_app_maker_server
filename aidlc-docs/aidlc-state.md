@@ -137,3 +137,6 @@
 - **Content/Deployment Validation**: 20 changed/new Markdown files, 10 contract JSON files, Bash/JSON fences, diff whitespace, and systemd syntax passed
 - **Independent Review**: APPROVED - no blocking or material changes required
 - **Current Plan Step**: Step 5 explicit commit and remote delivery
+- **Raw/Hermes Implementation Commit**: `2dbeff31aa11b123d5d65d60991f9e61543f9515`
+- **Remote Delivery**: PUSHED and SHA verified on `origin/feature/ai-worker-operational-readiness`
+- **Code Generation Part 2**: COMPLETE - all 17 execution checkboxes complete
