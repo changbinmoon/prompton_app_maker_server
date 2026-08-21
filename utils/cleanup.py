@@ -1,7 +1,6 @@
 """작업 디렉토리 관리 및 정리.
 
-설계 근거: business-logic-model.md 섹션 4, nfr-design-patterns.md Pattern 14
-비즈니스 규칙: BR-017 (디렉토리 생성 - 멱등성), BR-018 (24시간 초과 삭제)
+설계 근거: active business-rules.md BR-024/025, nfr-design-patterns.md PAT-PERF-04
 """
 
 from __future__ import annotations
@@ -17,8 +16,8 @@ logger = logging.getLogger(__name__)
 def prepare_workdir(base_path: Path) -> Path:
     """Job 작업 디렉토리를 깨끗한 상태로 준비한다 (BR-017).
 
-    이미 존재하면 삭제 후 재생성하여 재처리 시 이전 잔여물이 섞이지 않게 한다
-    (NFR Pattern 3: Idempotent Consumer).
+    이미 존재하면 삭제 후 재생성하여 SQS 재전달의 전체 재처리에 이전 잔여물이 섞이지 않게 한다
+    (PAT-RES-05: Queue-managed recovery and full reprocessing).
 
     Args:
         base_path: 생성할 작업 디렉토리 경로 (예: /data/jobs/{jobId})

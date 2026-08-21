@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "지렁이 게임 Android 앱을 만들어주세요.",
+    "aosVersion": 33,
+    "preferences": {
+      "orientation": "landscape",
+      "difficulty": "normal"
+    }
+  },
+  "android": {
+    "applicationId": "com.example.snakegame",
+    "minSdk": 33,
+    "targetSdk": 33,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": [
+    {
+      "fileName": "0-logo.png",
+      "contentType": "image/png",
+      "purpose": "앱 아이콘 참고 이미지"
+    },
+    {
+      "fileName": "1-background.jpg",
+      "contentType": "image/jpeg",
+      "purpose": "게임 배경 참고 이미지"
+    }
+  ]
+}

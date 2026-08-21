@@ -1,14 +1,18 @@
 # AI-DLC State Tracking
 
 ## Project Information
-- **Project Type**: Greenfield
+- **Project Type**: Brownfield (active Status API migration)
+- **Original Project Type**: Greenfield
 - **Start Date**: 2026-08-20T14:30:00Z
-- **Current Stage**: CONSTRUCTION - Code Generation Complete (승인 대기)
+- **Current Stage**: WORKFLOW COMPLETE - Operations Placeholder Acknowledged
+- **Prior Workflow Status**: COMPLETE at 2026-08-20T07:24:55Z
+- **Active Change Request**: Replace Worker direct DynamoDB access with Backend Status API
+- **Change Progress**: COMPLETE at 2026-08-20T13:09:41.571Z; no executable Operations stage exists
 
 ## Workspace State
-- **Existing Code**: Yes (Code Generation에서 생성)
-- **Reverse Engineering Needed**: No
-- **Workspace Root**: d:\Practice\prompthon\prompton_app_maker_server
+- **Existing Code**: Yes (Python Worker; 132-test detection baseline, current suite 149 tests)
+- **Reverse Engineering Needed**: No (current design and implementation artifacts loaded)
+- **Workspace Root**: /home/ubuntu/prompton_app_maker_server
 
 ## Code Location Rules
 - **Application Code**: Workspace root (NEVER in aidlc-docs/)
@@ -22,7 +26,114 @@
 | Resiliency Baseline | No | Requirements Analysis |
 | Property-Based Testing | No | Requirements Analysis |
 
-## Stage Progress
+## Active Status API Migration Execution Plan
+
+- **Plan**: `aidlc-docs/inception/plans/execution-plan.md`
+- **Risk Level**: High
+- **Deployable Units**: 1 (`ai-worker`)
+- **Stages to Execute After Approval**: Application Design, Functional Design, NFR Requirements, NFR Design, Code Generation, Build and Test
+- **Stages to Skip**: Units Generation (single deployment/runtime unit), Infrastructure Design (no Worker-owned resource or IaC change)
+- **Operational Checks Retained**: DynamoDB IAM removal, TCP 443 egress, TLS, env permissions, systemd validation, endpoint readiness, and joint Backend GET/Mobile E2E
+
+## Active Change Stage Progress
+
+### INCEPTION PHASE
+- [x] Workspace Detection - COMPLETED / existing brownfield context resumed
+- [x] Reverse Engineering - SKIP DECISION COMPLETE / current artifacts sufficient
+- [x] Requirements Analysis - COMPLETED AND APPROVED
+- [x] User Stories - COMPLETED AND APPROVED (7 stories)
+- [x] Workflow Planning - COMPLETED AND APPROVED (2026-08-20T11:22:16.964Z)
+- [x] Application Design - COMPLETED AND APPROVED (2026-08-20T11:35:53.834Z)
+- [x] Units Generation - SKIP DECISION COMPLETE / one `ai-worker` unit
+
+### CONSTRUCTION PHASE - ai-worker
+- [x] Functional Design - COMPLETED AND APPROVED (2026-08-20T11:44:39.281Z)
+- [x] NFR Requirements - COMPLETED AND APPROVED (2026-08-20T11:57:12.077Z)
+- [x] NFR Design - COMPLETED AND APPROVED (2026-08-20T12:11:11.523Z)
+- [x] Infrastructure Design - SKIP DECISION COMPLETE / no Worker-owned IaC
+- [x] Code Generation - COMPLETED AND APPROVED (2026-08-20T12:49:40.634Z)
+- [x] Build and Test - COMPLETED AND APPROVED (2026-08-20T13:08:18.475Z)
+
+### OPERATIONS PHASE
+- [x] Operations - PLACEHOLDER ACKNOWLEDGED / WORKFLOW COMPLETE (2026-08-20T13:09:41.571Z)
+
+## Active Application Design Validation
+- **Mandatory Artifacts**: 5/5 generated
+- **Python Signature Blocks**: 17 parsed
+- **Mermaid Diagrams**: 3/3 structurally validated with text alternatives
+- **Requirement Traceability**: 25/25 Status API IDs covered
+- **Lifecycle Invariants**: Verified artifact before mandatory SUCCESS; any 2xx before SQS deletion
+- **Forbidden Paths**: No target Worker GET, direct DynamoDB call, or disabled TLS configuration
+- **Independent Review**: APPROVED; no blocking findings
+
+## Active Functional Design Validation
+- **Mandatory Artifacts**: 3/3 generated; frontend N/A
+- **Business Rules**: 28 target rules
+- **Python Domain Blocks**: 12 parsed
+- **Mermaid Diagrams**: 3/3 structurally validated with text alternatives
+- **Requirement/Story Traceability**: 25/25 requirement IDs and 7/7 stories
+- **Critical Invariants**: Exact payloads; full reprocessing; 5xx-only retry; verified artifact and SUCCESS before delete; original-error preservation
+- **Delete Failure Rule**: Accepted SUCCESS remains authoritative; DeleteMessage failure logs and redelivers without contradictory FAILED
+- **Forbidden Paths**: No target Worker GET, direct DynamoDB call, or persistent status-log path
+- **Independent Review**: APPROVED; no blocking findings
+
+## Active NFR Requirements Validation
+- **Mandatory Artifacts**: 2/2 generated
+- **NFR Set**: 49/49 unique IDs across 10 categories
+- **Requirement/Story Traceability**: 25/25 requirement IDs and 7/7 stories
+- **Embedded Content**: TOML and systemd INI parsed; Bash syntax passed
+- **Technology Targets**: Python 3.12, requests 2.34.2, boto3 1.35.99, jsonschema 4.25.1, SQS/S3-only moto/stubs
+- **Critical Controls**: Exact timeout/retry, fail-closed SUCCESS, IAM removal, TLS/TCP443, optional key, env/workdir/systemd hardening, log exclusions
+- **Quality/E2E Gates**: pytest, Ruff, strict mypy, compileall, lock/frozen sync, source/deployment scans, joint Backend GET/Mobile evidence
+- **Independent Review**: APPROVED; no blocking findings
+
+## Active NFR Design Validation
+- **Mandatory Artifacts**: 2/2 generated; stage plan created and all five question categories resolved
+- **NFR Traceability**: 49/49 approved NFR IDs
+- **Requirement/Story Traceability**: 25/25 Status API requirement IDs and 7/7 stories
+- **Embedded Content**: 2/2 Mermaid diagrams structurally validated with text alternatives; 5 Python blocks parsed
+- **Critical Patterns**: 5xx-only bounded retry; intermediate degradation; mandatory SUCCESS; verified artifact before SUCCESS; accepted SUCCESS before delete; no contradictory FAILED after delete failure
+- **Security/Operations**: TLS defaults, optional-key confinement, DynamoDB IAM removal, TCP 443 readiness, protected environment, systemd hardening, journald allowlist, frozen dependencies
+- **Validation Result**: Markdown fences, whitespace, resolved answers, exact controls, and stale positive DynamoDB/GET patterns passed
+- **Independent Review**: APPROVED; no blocking or material findings
+
+## Active Code Generation Part 1 Validation
+- **Plan**: `aidlc-docs/construction/plans/ai-worker-code-generation-plan.md`
+- **Execution Sequence**: 8 numbered implementation/validation steps
+- **Traceability**: 25/25 Status API requirement IDs and 7/7 stories represented
+- **File Impact**: Exact create/modify/delete paths; brownfield in-place edits; no duplicate modules
+- **Baseline**: uv lock passed; 132 pytest passed with 98 warnings; Ruff passed; source-only strict mypy passed across 25 files; compileall passed
+- **Known Gate Gap**: Repository-wide `mypy .` exposes 13 pre-existing test errors; Step 5 closes them without weakening strict mode
+- **Safety Boundary**: Part 2 was approved at 2026-08-20T12:49:40.634Z; Build and Test instructions are authorized, but live AWS/API/model actions remain separately gated
+- **External Boundary**: No Worker IAM/IaC file exists; live API/AWS/model/deployment actions require separate authorization
+- **Plan Validation**: Markdown, embedded Python, paths, controls, step order, and approval boundary passed
+- **Independent Review**: APPROVED; no blocking or material changes required
+
+## Active Code Generation Part 2 Validation
+- **Execution Plan**: All eight approved generation steps and all seven Worker story checkboxes complete
+- **Implementation**: Status API PATCH client, lifecycle migration, DynamoDB adapter removal, configuration/dependency/deployment updates complete
+- **Local Gates**: 149 tests passed with 70 warnings; Ruff, repository-wide strict mypy over 39 files, compileall, lock check, frozen sync, source/security/deployment scans passed
+- **Traceability**: 25/25 Status API requirements, 49/49 NFRs, and 7/7 stories mapped in `code-summary.md`
+- **Independent Review**: No blocking or material findings; one stale active tracking item corrected
+- **External Boundary**: IAM, TCP 443, deployed env mode, queue/DLQ, and Backend GET/Mobile E2E remain Build and Test evidence
+- **Approval**: Code Generation approved at 2026-08-20T12:49:40.634Z
+
+## Active Build and Test Validation
+- **Artifacts**: Eight instruction/summary files regenerated for the Status API target
+- **Local Gates**: 149 tests passed with 70 warnings; Ruff, strict mypy over 39 files, compileall, lock check, and frozen sync passed
+- **Content Validation**: 52 Bash blocks, nine Python heredocs, six JSON blocks, paths, links, secrets, stale guidance, 25 requirements, 49 NFRs, and seven stories passed
+- **Independent Review**: No blocking or material findings; one cosmetic active state count corrected
+- **External Boundary**: Live IAM, TCP443, deployed env/systemd, queue/DLQ, model, Backend GET, Mobile, and E2E evidence remain explicitly gated
+- **Extensions**: Security Baseline, Resiliency Baseline, and Property-Based Testing disabled; N/A while project-specific controls remain enforced
+
+## Active Change Current Status
+- **Lifecycle Phase**: COMPLETE
+- **Current Stage**: Operations placeholder acknowledged
+- **Previous Step**: Build and Test approved at 2026-08-20T13:08:18.475Z
+- **Current Step**: None; the current AI-DLC workflow ends after Build and Test
+- **Status**: Active Status API migration workflow complete at 2026-08-20T13:09:41.571Z; deployment and live operations remain unauthorized
+
+## Prior Baseline Stage Progress
 - [x] Workspace Detection - COMPLETED (2026-08-20T14:30:00Z)
 - [x] Requirements Analysis - COMPLETED (2026-08-20T14:32:00Z)
 - [x] Workflow Planning - COMPLETED (2026-08-20T14:34:00Z)
@@ -34,8 +145,9 @@
 - [x] NFR Design - COMPLETED (2026-08-20T15:18:00Z)
 - [ ] Infrastructure Design - SKIP (기존 인프라 사용)
 - [x] Code Generation - Part 1 (Planning) COMPLETED (2026-08-20T15:26:00Z)
-- [x] Code Generation - Part 2 (Generation) COMPLETED (2026-08-20T15:45:00Z) - 승인 대기
-- [ ] Build and Test - EXECUTE
+- [x] Code Generation - Part 2 (Generation) COMPLETED (2026-08-20T15:45:00Z), APPROVED (2026-08-20T07:10:01Z)
+- [x] Build and Test - COMPLETED (2026-08-20T07:21:10Z), APPROVED (2026-08-20T07:24:55Z)
+- [x] Operations - PLACEHOLDER ACKNOWLEDGED (2026-08-20T07:24:55Z) - 현재 실행 단계 없음, AI-DLC 워크플로 종료
 
 ## Code Generation Results (ai-worker)
 - **생성 파일**: 33개 (소스 21, 테스트 11, 배포 2, 설정 3)
@@ -43,4 +155,99 @@
 - **린트 (ruff)**: All checks passed
 - **타입 체크 (mypy strict)**: Success, 23 files
 - **코드 요약**: aidlc-docs/construction/ai-worker/code/code-summary.md
-- **계획 파일**: aidlc-docs/construction/plans/ai-worker-code-generation-plan.md (14/14 steps [x])
+- **계획 파일**: Historical 14-step baseline plan superseded; `aidlc-docs/construction/plans/ai-worker-code-generation-plan.md` now contains the active Status API migration plan
+
+## Build and Test Results
+- **완료 시각**: 2026-08-20T07:21:10Z
+- **빌드**: uv frozen sync, lock check, Python compile 모두 성공
+- **단위/로컬 컴포넌트 테스트**: 105 passed, 0 failed (82 botocore/moto deprecation warnings)
+- **린트**: Ruff All checks passed
+- **타입 체크**: mypy strict Success (23 source files)
+- **콘텐츠 검증**: Markdown 8개, Bash block 37개, JSON block 1개 구문 검증 통과
+- **수정 사항**: 미지원 `kiro-cli generate` 호출을 2.18.1 호환 `chat --no-interactive --model claude-opus-5` 호출로 수정
+- **산출물**: `aidlc-docs/construction/build-and-test/` 내 필수 5개 및 추가 3개 지침 파일
+- **미실행**: 실제 AWS/Opus 5/Android 전체 E2E 및 성능 테스트 (격리 리소스 승인과 확정 requirements 스키마 필요)
+- **요약**: `aidlc-docs/construction/build-and-test/build-and-test-summary.md`
+
+## Workflow Completion
+- **Completed At**: 2026-08-20T07:24:55Z
+- **CONSTRUCTION**: Build and Test까지 완료 및 사용자 승인됨
+- **OPERATIONS**: 현재 placeholder이며 배포·모니터링 실행 절차는 정의되지 않음
+- **Workflow Status**: COMPLETE
+- **Production Activation**: 별도 승인 필요. 확정된 `requirements.json` 계약, 실제 AWS/Opus 5/Android E2E, 대상 EC2 성능 기준선, 보안 검사를 먼저 완료해야 함
+
+## Delivery and Operational Test Preparation
+- **Requested At**: 2026-08-20T07:27:18Z
+- **Delivery Branch**: `feature/ai-worker-operational-readiness`
+- **Runbook**: `aidlc-docs/operations/operational-test-plan.md`
+- **Operational Test Status**: NOT STARTED
+- **Reason**: 실제 AWS 변경과 Opus 5 비용이 발생하므로 격리 리소스 및 명시적 테스트 승인 필요
+- **Primary Blockers**: Actual Backend raw JSON upload/SQS wiring, service-user Hermes live provisioning, test EC2/IAM/Queue-DLQ isolation, Java/Android Gradle Plugin compatibility
+- **Remote Push Status**: PUSHED (verified 2026-08-20T07:40:54Z)
+- **Remote Branch**: `origin/feature/ai-worker-operational-readiness`
+- **Verified Delivery Base Commit**: `6ce19f9247304094f0d1e7f4c65ec99b43196181`
+
+## Requirements Contract Decision Status
+- **Reviewed At**: 2026-08-20T08:11:17Z
+- **Original Answers**: Complete (6/6)
+- **Clarification Answers**: Complete (5/5)
+- **Implementation Answers**: Superseded by approved raw Client JSON flow and Worker-owned guardrails
+- **Schema Status**: RETAINED AS OPTIONAL REFERENCE - `contracts/requirements.schema.json`
+- **Fixture Status**: RETAINED AS OPTIONAL REFERENCE - 2 valid, 7 invalid
+- **Worker Validation Status**: IMPLEMENTED - 64 KiB, UTF-8 JSON, top-level raw object
+- **Backend Producer Status**: PENDING IN EXTERNAL REPOSITORY - raw object S3 upload and SQS pointer only
+- **Hermes Status**: IMPLEMENTED LOCALLY - v0.20.4 one-shot, 3 attempts, output validation, Kiro raw fallback
+- **Contract README**: `contracts/README.md`
+- **Decision Files**: `aidlc-docs/operations/requirements-contract-questions.md`, `requirements-contract-clarification-questions.md`, `requirements-contract-implementation-questions.md`
+
+## Requirements Contract Implementation Results
+- **Completed At**: 2026-08-20T08:11:17Z
+- **Schema**: Draft 2020-12 v1, canonical root and strict Android/assets fields
+- **Fixtures**: 2 valid, 7 invalid
+- **Worker Enforcement**: 64 KiB limit, schema validation, minSdk<=targetSdk
+- **Dependency**: `jsonschema==4.25.1`
+- **Validation**: 118 passed, Ruff passed, mypy strict passed (24 source files)
+- **Consumer Status**: SUPERSEDED AT RUNTIME - canonical validator remains optional reference only
+- **Producer Status**: Raw object upload/SQS wiring pending in absent Backend repository
+- **Hermes Status**: Worker implementation complete; live service-user provider/model validation pending
+- **Implementation Commit**: `3b2779e6bf1c3dd7b1c66d5c7cced806218c8ff0`
+- **Remote Delivery**: PUSHED and SHA verified on `origin/feature/ai-worker-operational-readiness`
+
+## Pending Backend and Hermes Integration Follow-up
+- **Requested At**: 2026-08-20T08:42:43Z
+- **Backend Repository Discovery**: BLOCKED - this workspace contains Worker code only
+- **Hermes Discovery**: `/home/ubuntu/.local/bin/hermes`, Hermes Agent v0.20.4
+- **Verified Hermes Interface**: `--oneshot` prompt input and final text stdout
+- **Decision File**: `aidlc-docs/operations/pending-integrations-questions.md`
+- **Status**: WAITING FOR USER ANSWERS - Backend target, model/provider isolation, retry, and fallback
+- **Hermes Policy Answers**: VALID - host default model/provider, 3 total attempts with 1s/2s backoff, raw Client JSON fallback
+- **Backend Producer Answer**: CLARIFICATION REQUIRED - user requested definition instead of selecting scope
+- **Clarification File**: `aidlc-docs/operations/pending-integrations-clarification-questions.md`
+
+## Raw Client JSON to Hermes Flow Revision
+- **Requested At**: 2026-08-20T08:54:22Z
+- **Target Ingress**: Raw Client JSON object stored in S3 and fetched by Worker
+- **Current Decision**: Worker owns deterministic Android guardrails; canonical schema is not runtime ingress
+- **Implemented Runtime**: raw object validation, Hermes prompt refinement, `refined-prompt.md`, Kiro raw fallback
+- **Clarification File**: `aidlc-docs/operations/raw-client-hermes-flow-clarification.md` (Answer A)
+- **Status**: APPROVED AND LOCALLY IMPLEMENTED
+- **Code Generation Plan**: `aidlc-docs/construction/plans/raw-client-hermes-integration-plan.md` (5 steps, 24 checkboxes)
+- **Code Generation Part 1**: COMPLETE - plan validated
+- **Code Generation Part 2**: WAITING FOR EXPLICIT PLAN APPROVAL
+- **Plan Approval**: APPROVED at 2026-08-20T09:03:12Z (`진행`)
+- **Code Generation Part 2**: IN PROGRESS - Step 1 Raw S3 ingress
+- **Step 1 Raw S3 Ingress**: COMPLETE - 26 targeted tests passed, Ruff passed
+- **Current Plan Step**: Step 2 Hermes prompt refiner
+- **Step 2 Hermes Refiner**: COMPLETE - 9 tests passed, Ruff and strict mypy passed
+- **Current Plan Step**: Step 3 Worker and Kiro integration
+- **Step 3 Worker/Kiro Integration**: COMPLETE - 55 targeted tests passed, Ruff and strict mypy passed
+- **Current Plan Step**: Step 4 Deployment and contract documentation
+- **Step 4 Deployment/Contract Docs**: COMPLETE - 12 Markdown files and embedded Bash/JSON blocks validated
+- **Current Plan Step**: Step 5 Validation and delivery
+- **Step 5 Validation**: 132 passed, 98 warnings; Ruff passed; strict mypy passed (25 source files); compile and lock checks passed
+- **Content/Deployment Validation**: 20 changed/new Markdown files, 10 contract JSON files, Bash/JSON fences, diff whitespace, and systemd syntax passed
+- **Independent Review**: APPROVED - no blocking or material changes required
+- **Current Plan Step**: Step 5 explicit commit and remote delivery
+- **Raw/Hermes Implementation Commit**: `2dbeff31aa11b123d5d65d60991f9e61543f9515`
+- **Remote Delivery**: PUSHED and SHA verified on `origin/feature/ai-worker-operational-readiness`
+- **Code Generation Part 2**: COMPLETE - all 17 execution checkboxes complete

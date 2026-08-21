@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "asset이 너무 많은 요청"
+  },
+  "android": {
+    "applicationId": "com.example.toomanyassets",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": [
+    {"fileName": "0-image.png", "contentType": "image/png"},
+    {"fileName": "1-image.png", "contentType": "image/png"},
+    {"fileName": "2-image.png", "contentType": "image/png"},
+    {"fileName": "3-image.png", "contentType": "image/png"},
+    {"fileName": "4-image.png", "contentType": "image/png"},
+    {"fileName": "5-image.png", "contentType": "image/png"}
+  ]
+}

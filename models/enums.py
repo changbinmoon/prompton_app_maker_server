@@ -51,18 +51,10 @@ JOB_PROGRESS: dict[JobStatus, int] = {
 #: 상태별 사용자 표시 메시지 (한국어)
 STATUS_MESSAGES: dict[JobStatus, str] = {
     JobStatus.ANALYZING: "요구조건을 분석하고 있습니다.",
-    JobStatus.GENERATING_CODE: "앱 코드를 생성하고 있습니다.",
+    JobStatus.GENERATING_CODE: "Android 코드를 생성하고 있습니다.",
     JobStatus.BUILDING: "APK를 빌드하고 있습니다.",
     JobStatus.SUCCESS: "앱 생성이 완료되었습니다.",
 }
-
-#: 이미 종결된 상태 - 재처리 대상에서 제외한다 (BR-001 중복 처리 방지)
-TERMINAL_STATUSES: frozenset[JobStatus] = frozenset(
-    {
-        JobStatus.SUCCESS,
-        JobStatus.CANCELED,
-    }
-)
 
 #: 에러 코드별 사용자 표시 메시지 (BR-009: 민감 정보 노출 금지)
 ERROR_MESSAGES: dict[ErrorCode, str] = {

@@ -1,9 +1,8 @@
 """SQS Visibility Timeout 연장 스레드.
 
-설계 근거: business-logic-model.md 섹션 3, nfr-design-patterns.md Pattern 2
-비즈니스 규칙: BR-010 (연장 주기 = VT의 50%), BR-011 (연장 실패 시 처리 계속)
+설계 근거: active business-rules.md BR-016/017, nfr-design-patterns.md PAT-RES-06
 
-daemon thread로 동작하므로 메인 프로세스가 종료되면 함께 종료된다.
+Daemon thread로 동작하며 Job 처리 성공/실패 모든 경로에서 stop과 짝을 이룬다.
 """
 
 from __future__ import annotations

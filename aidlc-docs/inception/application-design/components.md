@@ -1,91 +1,141 @@
-# Components - Prompton AI Worker
+# Components - Prompton AI Worker Status API Target Design
 
-## 컴포넌트 목록
+## Document Status
 
-### 1. sqs - SQS 메시지 관리
-**책임:**
-- SQS Queue에서 메시지 수신 (polling)
-- 메시지 파싱 (jobId, requirements, assetsPrefix 추출)
-- 메시지 삭제 (정상 완료 후)
-- Visibility Timeout 연장 (장시간 처리 시)
+- **Stage**: Application Design
+- **Scope**: Single deployable `ai-worker` process
+- **Authoritative requirements**: `status-api-requirements.md`
+- **Design rule**: Backend owns status persistence; the Worker emits PATCH requests and never reads Job status.
 
-**인터페이스:**
-- 외부: AWS SQS (prompton-app-build-jobs-dev)
-- 내부: worker (메인 오케스트레이터)에 메시지 전달
+## 1. WorkerOrchestrator
 
----
+**Purpose**: Coordinate one delivered SQS Job from a clean workspace through AI generation, APK verification, status reporting, and conditional message deletion.
 
-### 2. s3 - S3 파일 관리
-**책임:**
-- requirements.json 다운로드
-- 사용자 에셋(이미지) 다운로드
-- 생성 코드 업로드 (source/)
-- APK 업로드 (artifact/)
+**Responsibilities**:
+- Poll SQS and process one Job at a time.
+- Recreate `/data/jobs/{jobId}` for every delivery; never skip based on remote status.
+- Start and stop the existing visibility extender around processing.
+- Invoke ANALYZING, GENERATING_CODE, and BUILDING reports as best-effort operations.
+- Invoke SUCCESS as a mandatory operation after verified S3 artifact upload.
+- Delete the SQS message only after mandatory SUCCESS returns successfully.
+- Classify processing failures and invoke FAILED as best-effort without replacing the original error.
+- Emit sanitized phase and outcome events through Python logging.
 
-**인터페이스:**
-- 외부: AWS S3 (prompton-app-builder-dev-changbin)
-- 내부: worker에 파일 경로/데이터 제공
+**Interfaces**:
+- Receives `SQSMessage` from `SQSClient`.
+- Constructor-injects `StatusApiClient`, `SQSClient`, `S3Client`, `PromptRefiner`, `AIGenerator`, and `ApkBuilder` for deterministic testing.
+- Does not construct or call any DynamoDB resource and does not call a Backend GET endpoint.
 
----
+## 2. StatusApiClient
 
-### 3. dynamo - DynamoDB 상태 관리
-**책임:**
-- Job 상태 조회 (중복 처리 확인)
-- Job 상태 업데이트 (status, progress, message)
-- 로그 기록 (logs 필드 업데이트)
-- artifactKey 저장 (성공 시)
-- 에러 정보 기록 (실패 시)
+**Purpose**: Encapsulate the outbound Backend Status API transport contract.
 
-**인터페이스:**
-- 외부: AWS DynamoDB (prompton-jobs-dev, PK: jobId)
-- 내부: worker에서 상태 전이 시 호출
+**Responsibilities**:
+- Join `PROMPTON_API_BASE_URL` with `/v1/jobs/{jobId}/status` without duplicate slashes.
+- Build JSON payloads and omit fields whose value is `None`.
+- Always send `Content-Type: application/json`.
+- Add `x-api-key` only when `PROMPTON_STATUS_API_KEY` is non-empty.
+- Call PATCH with connect/read timeout `(3, 10)` and default TLS verification.
+- Treat any 2xx as success without parsing a response body.
+- Apply the approved retry policy only to 5xx responses.
+- Raise a sanitized typed exception after a final 4xx, 5xx, connection, or timeout failure.
+- Log status, HTTP class, attempt count, and retry decisions without logging secrets, request bodies, or full response bodies.
 
----
+**Interfaces**:
+- Public operation: `update_job_status(...) -> None`.
+- Production dependencies: `requests.Session` and a sleep function.
+- Test seams: injectable session and sleep callable.
+- No GET method exists.
 
-### 4. ai - AI 코드 생성
-**책임:**
-- kiro-cli 프로세스 호출
-- requirements.json 기반 앱 코드 생성 프롬프트 구성
-- assets 참조 전달
-- 생성 결과물(Android 프로젝트) 수집
+## 3. Config
 
-**인터페이스:**
-- 외부: kiro-cli (subprocess) + Opus5 모델
-- 내부: worker에 생성된 프로젝트 경로 반환
+**Purpose**: Validate environment configuration and provide immutable runtime values to components.
 
----
+**Responsibilities**:
+- Require `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, and non-empty `PROMPTON_API_BASE_URL`.
+- Read optional `PROMPTON_STATUS_API_KEY`; normalize missing or empty input to `None`.
+- Preserve existing AWS region, work directory, visibility, cleanup, logging, Hermes, Kiro, and Gradle settings.
+- Remove `DYNAMODB_TABLE_NAME` from the model and startup contract.
+- Never render the API key in errors or startup logs.
 
-### 5. build - APK 빌드
-**책임:**
-- Gradle Wrapper 생성 (gradlew)
-- assembleDebug 태스크 실행
-- 빌드 결과(APK 파일 경로) 반환
-- 빌드 로그 수집
+## 4. SQSClient
 
-**인터페이스:**
-- 외부: Android SDK, Gradle (EC2 사전 설치)
-- 내부: worker에 APK 파일 경로 반환
+**Purpose**: Receive, validate, extend, and delete SQS messages through the existing AWS SDK boundary.
 
----
+**Responsibilities**:
+- Long-poll for one message and return a validated `SQSMessage`.
+- Extend visibility through the existing API.
+- Delete only when instructed by `WorkerOrchestrator` after mandatory SUCCESS.
+- Preserve existing boto3 retry and IAM behavior.
 
-### 6. worker - 메인 오케스트레이터
-**책임:**
-- 메인 루프 (SQS polling → 처리 → 완료)
-- 처리 시퀀스 조율 (상태 전이 순서 보장)
-- 중복 처리 방지 로직
-- Visibility Timeout 연장 스케줄링
-- Graceful Shutdown 처리 (SIGTERM → 현재 단계 완료 후 종료)
+**Status migration impact**: No public interface change. Terminal-status lookup and early message deletion are removed from the orchestrator, not moved into this component.
 
-**인터페이스:**
-- 내부: 모든 컴포넌트를 조율
+## 5. S3Client
 
----
+**Purpose**: Manage Job inputs, optional source output, and the required APK artifact.
 
-### 7. config - 설정 관리
-**책임:**
-- 환경 변수 로드 및 검증
-- 설정값 중앙 관리 (QUEUE_URL, TABLE_NAME, BUCKET_NAME 등)
-- 기본값 제공
+**Responsibilities**:
+- Preserve raw Client JSON and asset ingress behavior.
+- Upload source as an existing best-effort operation.
+- Upload the APK, call HeadObject, compare remote and local sizes, and return the artifact key only after verification.
+- Raise `ArtifactUploadError` before SUCCESS reporting when upload or verification fails.
 
-**인터페이스:**
-- 내부: 모든 컴포넌트에서 설정값 참조
+**Status migration impact**: Update documentation language from “before DynamoDB SUCCESS” to “before mandatory Status API SUCCESS”; no public interface change is required.
+
+## 6. PromptRefiner
+
+**Purpose**: Run Hermes one-shot prompt refinement with the existing bounded retry and raw JSON fallback.
+
+**Status migration impact**: No interface change. Phase activity is logged locally rather than appended to a DynamoDB `logs` array.
+
+## 7. AIGenerator
+
+**Purpose**: Run Kiro code generation and validate the Android project output.
+
+**Status migration impact**: No interface change. The orchestrator sends GENERATING_CODE before invoking this generation path, and operational logs remain sanitized.
+
+## 8. ApkBuilder
+
+**Purpose**: Build and verify the local debug APK through Gradle and the Android SDK.
+
+**Status migration impact**: No interface change. The orchestrator sends BUILDING before invoking this component.
+
+## 9. VisibilityExtender
+
+**Purpose**: Extend SQS visibility in a daemon thread while the current Job is processed.
+
+**Status migration impact**: No interface change. It begins for every delivered message because terminal-status prechecks are removed and always stops in `finally`.
+
+## 10. Shared Models, Exceptions, and Logging
+
+**Purpose**: Provide transport-neutral Job statuses, approved error codes, safe user messages, and sanitized operational events.
+
+**Responsibilities**:
+- Reuse `JobStatus` and the six approved `ErrorCode` values.
+- Add a typed Status API failure that classifies as `INTERNAL_ERROR` when mandatory SUCCESS fails.
+- Ensure FAILED payloads omit progress and preserve the original processing exception if reporting also fails.
+- Use Python logging for phase start/completion, PATCH results/retries, and final Job outcomes.
+- Never log API keys, raw Client JSON, Hermes stdout/stderr, signed URLs, AWS credentials, or full Backend response bodies.
+
+## Removed Component and Paths
+
+| Removed design element | Replacement |
+|---|---|
+| `DynamoClient.get_job_status()` | No replacement; every delivered message is fully reprocessed. |
+| Terminal SUCCESS/CANCELED skip and early SQS deletion | Removed; only mandatory SUCCESS 2xx authorizes deletion. |
+| `DynamoClient.update_status()` | `StatusApiClient.update_job_status()`. |
+| `DynamoClient.append_log()` | Sanitized Python logging to journald. |
+| `dynamo` package and DynamoDB table construction | Removed from Worker runtime. |
+| `DYNAMODB_TABLE_NAME` | Required `PROMPTON_API_BASE_URL` and optional `PROMPTON_STATUS_API_KEY`. |
+| DynamoDB IAM actions | No status-storage IAM actions; retain SQS/S3 permissions. |
+
+## External System Boundaries
+
+| External system | Worker relationship | Ownership |
+|---|---|---|
+| Backend Status API | Outbound HTTPS PATCH only | Backend team |
+| Backend GET API | Joint E2E observer; never called by Worker | Backend team |
+| API Gateway, Lambda, DynamoDB | Hidden behind Backend API | Backend team |
+| Mobile App | External acceptance observer | Mobile team |
+| AWS SQS and S3 | Existing Worker data plane | Worker deployment |
+| Hermes, Kiro, Gradle | Existing local subprocess dependencies | Worker deployment |

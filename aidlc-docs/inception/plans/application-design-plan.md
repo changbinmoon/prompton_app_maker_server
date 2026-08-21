@@ -1,101 +1,124 @@
-# Application Design Plan - Prompton AI Worker
+# Application Design Plan - Status API Migration
 
-## Design Plan
+## Plan Status
 
-- [x] 컴포넌트 식별 및 책임 정의
-- [x] 컴포넌트 메서드 시그니처 정의
-- [x] 서비스 계층 설계
-- [x] 컴포넌트 의존성 관계 정의
-- [x] 설계 완전성 및 일관성 검증
+- **Stage**: INCEPTION - Application Design
+- **Status**: IN PROGRESS
+- **Unit boundary**: Single deployable `ai-worker`
+- **Authoritative requirements**: `status-api-requirements.md`
+- **Approved stories**: `US-SA-01` through `US-SA-07`
+- **Scope**: Component boundaries, public interfaces, service orchestration, dependency direction, and communication patterns
+- **Out of scope**: Detailed retry algorithms and business-rule pseudocode (Functional/NFR Design), application code changes (Code Generation), and Backend/Mobile implementation
 
----
+## Step 1 - Context and Impact Analysis
 
-## Design Questions
+- [x] Load approved Status API requirements, stories, persona, and execution plan.
+- [x] Inspect all existing Application Design artifacts.
+- [x] Inspect current Worker, DynamoDB, config, S3, SQS, AI, build, visibility, status, and exception interfaces.
+- [x] Identify obsolete design paths: Worker-side GET, terminal skip/delete, DynamoDB UpdateItem, DynamoDB logs, table configuration, and DynamoDB IAM dependency.
+- [x] Confirm one-unit boundary and constructor-injection seam.
 
-아래 질문에 답변하여 설계 방향을 확정해주세요.
+## Step 2 - Resolved Design Questions
 
-### Component Organization
+All answers below are inherited from approved requirements and stories. They introduce no new product decision and contain no unresolved `[Answer]:` tag.
 
-## Question 1
-AI Worker의 프로젝트 구조를 어떤 패턴으로 구성하시겠습니까?
+### Question 1 - Status integration component boundary
 
-A) Layered Architecture - 계층별 분리 (handler → service → repository/client)
+How should outbound Job status updates be isolated from orchestration and AWS clients?
 
-B) Modular by Feature - 기능별 모듈 분리 (sqs/, s3/, dynamo/, ai/, build/)
+A) Add HTTP calls directly to `WorkerOrchestrator`
 
-C) Simple Flat Structure - 최소한의 파일 구조 (main.py + 헬퍼 모듈 몇 개)
+B) Create a dedicated `status_api` client with one public status-update interface
 
-X) Other (please describe after [Answer]: tag below)
+C) Extend `DynamoClient` to support HTTP as a second transport
 
-[Answer]: B
+X) Other
 
-### Service Layer Design
+[Answer]: B - FR-SA-003 requires a separate Status API client; direct DynamoDB access and the Dynamo component are removed.
 
-## Question 2
-Worker의 메인 루프 구현 방식은 어떤 것을 선호하시겠습니까?
+### Question 2 - Client outcome contract
 
-A) 단순 while-loop + sleep (polling interval 기반)
+How should the client communicate a final non-success result to the orchestrator?
 
-B) Long Polling (WaitTimeSeconds=20 활용, 메시지 없으면 대기)
+A) Return `bool` and require callers to infer the cause from logs
 
-C) boto3 SQS 리소스의 기본 polling 메커니즘
+B) Return `None` on any 2xx and raise a sanitized typed Status API exception on final failure
 
-X) Other (please describe after [Answer]: tag below)
+C) Swallow every failure inside the client
 
-[Answer]: C
+X) Other
 
-### Component Dependencies
+[Answer]: B - This keeps HTTP policy in the client while allowing the orchestrator to apply best-effort or mandatory criticality without exposing response bodies or credentials.
 
-## Question 3
-kiro-cli 호출 시 프로젝트 코드를 어디에 생성하시겠습니까?
+### Question 3 - Status criticality ownership
 
-A) 로컬 임시 디렉토리 (/tmp/jobs/{jobId}/) - 완료 후 정리
+Where should intermediate, SUCCESS, and FAILED criticality be selected?
 
-B) Worker 작업 디렉토리 내 고정 경로 (./workspace/jobs/{jobId}/)
+A) Inside the HTTP client based on status values
 
-C) EC2 인스턴스의 전용 데이터 볼륨 (/data/jobs/{jobId}/)
+B) In explicit orchestrator reporting methods that call a transport-neutral client
 
-X) Other (please describe after [Answer]: tag below)
+C) In the Backend response body
 
-[Answer]: C
+X) Other
 
-### Design Patterns
+[Answer]: B - The orchestrator owns Job lifecycle semantics; the client owns transport behavior. Intermediate/FAILED paths catch typed failures, while SUCCESS lets the failure enter normal Job failure handling.
 
-## Question 4
-에러 처리 및 재시도 패턴은 어떤 수준으로 구현하시겠습니까?
+### Question 4 - HTTP dependency injection
 
-A) 기본 try/except - 단계별 예외 캐치 후 FAILED 상태 기록
+How should HTTP calls be made testable without coupling orchestrator tests to requests internals?
 
-B) 재시도 로직 포함 - S3/DynamoDB 호출에 exponential backoff 적용
+A) Patch the module-level `requests.patch` function in every test
 
-C) Circuit Breaker 패턴 - 외부 서비스(kiro-cli, Gradle) 장애 감지 및 차단
+B) Inject a `requests.Session` and sleep callable into `StatusApiClient`, with secure production defaults
 
-X) Other (please describe after [Answer]: tag below)
+C) Introduce a second network microservice
 
-[Answer]: B
+X) Other
 
-## Question 5
-설정 관리 방식은 어떤 것을 선호하시겠습니까?
+[Answer]: B - Session and sleep injection provide deterministic contract tests while preserving a small in-process component boundary.
 
-A) 환경 변수 기반 (AWS_REGION, QUEUE_URL, TABLE_NAME 등)
+### Question 5 - User and operational logs
 
-B) 설정 파일 (config.yaml 또는 config.json)
+What replaces DynamoDB `logs` persistence?
 
-C) AWS Systems Manager Parameter Store
+A) Sanitized Python logging to journald only; Backend receives only the approved latest status message
 
-X) Other (please describe after [Answer]: tag below)
+B) Add an unapproved Backend log endpoint
 
-[Answer]: A
+C) Store logs in S3 from the Worker
 
-## Question 6
-Graceful Shutdown (프로세스 종료 시 진행 중인 Job 처리)이 필요합니까?
+X) Other
 
-A) 예 - SIGTERM 수신 시 현재 Job 완료 후 종료
+[Answer]: A - FR-SA-015 and FR-SA-016 remove persistent user log writes and retain sanitized operational logging.
 
-B) 아니오 - 즉시 종료 (SQS Visibility Timeout으로 자동 재처리)
+### Answer Analysis
 
-C) 기본 수준 - 현재 단계까지만 완료 후 종료
+- [x] All five answers are specific and map directly to approved requirement IDs.
+- [x] No combined, conditional, vague, or contradictory answer exists.
+- [x] No follow-up design question is required.
 
-X) Other (please describe after [Answer]: tag below)
+## Step 3 - Mandatory Design Artifacts
 
-[Answer]: C
+- [x] Update `components.md` with target component definitions, responsibilities, and interfaces.
+- [x] Update `component-methods.md` with target method signatures, inputs, outputs, and high-level failure contracts.
+- [x] Update `services.md` with lifecycle orchestration and service interaction boundaries.
+- [x] Update `component-dependency.md` with dependency matrix, external systems, and validated Mermaid/data-flow alternatives.
+- [x] Update consolidated `application-design.md` with architecture decisions and end-to-end component view.
+
+## Step 4 - Design Validation
+
+- [x] Verify no target design path directly accesses DynamoDB or calls Worker-side GET.
+- [x] Verify intermediate and FAILED reporting are best-effort while SUCCESS is mandatory.
+- [x] Verify artifact upload/HeadObject-size validation precedes SUCCESS and SUCCESS 2xx precedes SQS deletion.
+- [x] Verify Status API URL, optional API key, timeout/retry ownership, TLS, and safe logging boundaries are represented.
+- [x] Verify all Mermaid diagrams, text alternatives, Markdown fences, links, and whitespace.
+- [x] Verify cross-artifact component and method names are consistent.
+- [x] Verify traceability to FR-SA-001 through FR-SA-018 and NFR-SA-001 through NFR-SA-003 at Application Design depth.
+
+## Step 5 - Completion and Approval
+
+- [x] Update `aidlc-state.md` to the Application Design approval gate.
+- [x] Log artifact completion, disabled-extension handling, validation evidence, and the complete approval prompt in `audit.md`.
+- [x] Present explicit `Request Changes`, `Add Units Generation`, and `Approve & Continue` choices.
+- [x] Wait for explicit user approval before entering Functional Design.

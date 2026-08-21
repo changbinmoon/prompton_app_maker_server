@@ -13,6 +13,8 @@ from ai.generator import AIGenerator
 from models.entities import Config
 from models.exceptions import AIGenerationError
 
+JOB_ID = "12345678-1234-5678-1234-567812345678"
+
 
 def _write_requirements(path: Path) -> Path:
     """테스트용 requirements.json을 생성한다."""
@@ -55,7 +57,7 @@ class RunRecorder:
 def test_generate_code_success(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """정상 생성 시 출력 디렉토리를 반환한다."""
+    """정상 생성 시 실제 kiro-cli chat 규격으로 호출하고 출력 디렉토리를 반환한다."""
     requirements = _write_requirements(tmp_path / "requirements.json")
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -64,18 +66,58 @@ def test_generate_code_success(
     recorder = RunRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    result = AIGenerator(config).generate_code(requirements, assets, output)
+    result = AIGenerator(config).generate_code(requirements, assets, output, job_id=JOB_ID)
 
     assert result == output
-    assert recorder.commands[0][0] == config.kiro_cli_path
-    assert str(requirements) in recorder.commands[0]
-    assert str(output) in recorder.commands[0]
+    command = recorder.commands[0]
+    assert command[0] == config.kiro_cli_path
+    assert command[1] == "chat"
+    assert "--no-interactive" in command
+    assert command[command.index("--model") + 1] == "claude-opus-5"
+    assert "--trust-tools=fs_read,fs_write" in command
+    prompt = command[-1]
+    assert str(requirements) in prompt
+    assert str(assets) in prompt
+    assert str(output) in prompt
+    assert "No Hermes-refined prompt is available" in prompt
+    assert "Kotlin and Jetpack Compose" in prompt
+    assert "minSdk 26 and targetSdk 35" in prompt
+    assert "com.prompton.generated.j12345678123456781234567812345678" in prompt
+    assert recorder.kwargs[0]["cwd"] == str(output)
 
 
-def test_generate_code_includes_assets_arg_when_present(
+def test_generate_code_reads_refined_prompt_when_present(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """에셋이 있으면 --assets 인자가 추가된다."""
+    """Hermes 출력이 있으면 Kiro prompt에 refined-prompt.md 경로를 포함한다."""
+    requirements = _write_requirements(tmp_path / "requirements.json")
+    refined = tmp_path / "refined-prompt.md"
+    refined.write_text("Build a snake game", encoding="utf-8")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    output = tmp_path / "project"
+    recorder = RunRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    AIGenerator(config).generate_code(
+        requirements,
+        assets,
+        output,
+        job_id=JOB_ID,
+        refined_prompt_path=refined,
+    )
+
+    prompt = recorder.commands[0][-1]
+    assert str(refined) in prompt
+    assert "First read and follow the refined implementation prompt" in prompt
+    assert str(requirements) in prompt
+    assert "Kotlin and Jetpack Compose" in prompt
+
+
+def test_generate_code_includes_assets_path_when_present(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """에셋이 있으면 단일 chat 프롬프트에 에셋 경로가 포함된다."""
     requirements = _write_requirements(tmp_path / "requirements.json")
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -85,16 +127,16 @@ def test_generate_code_includes_assets_arg_when_present(
     recorder = RunRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    AIGenerator(config).generate_code(requirements, assets, output)
+    AIGenerator(config).generate_code(requirements, assets, output, job_id=JOB_ID)
 
-    assert "--assets" in recorder.commands[0]
-    assert str(assets) in recorder.commands[0]
+    assert str(assets) in recorder.commands[0][-1]
+    assert "--assets" not in recorder.commands[0]
 
 
-def test_generate_code_omits_assets_arg_when_empty(
+def test_generate_code_omits_unsupported_assets_option_when_empty(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """에셋이 없으면 --assets 인자를 넣지 않는다 (BR-014)."""
+    """에셋이 없어도 실제 CLI에 없는 --assets 옵션을 추가하지 않는다 (BR-014)."""
     requirements = _write_requirements(tmp_path / "requirements.json")
     assets = tmp_path / "assets"
     assets.mkdir()
@@ -103,16 +145,17 @@ def test_generate_code_omits_assets_arg_when_empty(
     recorder = RunRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    AIGenerator(config).generate_code(requirements, assets, output)
+    AIGenerator(config).generate_code(requirements, assets, output, job_id=JOB_ID)
 
     assert "--assets" not in recorder.commands[0]
+    assert str(assets) in recorder.commands[0][-1]
 
 
 def test_generate_code_missing_requirements(config: Config, tmp_path: Path) -> None:
     """requirements.json이 없으면 AIGenerationError가 발생한다."""
     with pytest.raises(AIGenerationError):
         AIGenerator(config).generate_code(
-            tmp_path / "missing.json", tmp_path / "assets", tmp_path / "project"
+            tmp_path / "missing.json", tmp_path / "assets", tmp_path / "project", job_id=JOB_ID
         )
 
 
@@ -125,7 +168,7 @@ def test_generate_code_nonzero_exit(
 
     with pytest.raises(AIGenerationError):
         AIGenerator(config).generate_code(
-            requirements, tmp_path / "assets", tmp_path / "project"
+            requirements, tmp_path / "assets", tmp_path / "project", job_id=JOB_ID
         )
 
 
@@ -134,13 +177,11 @@ def test_generate_code_cli_not_found(
 ) -> None:
     """CLI 실행 파일이 없으면 AIGenerationError로 변환된다 (BR-008)."""
     requirements = _write_requirements(tmp_path / "requirements.json")
-    monkeypatch.setattr(
-        subprocess, "run", RunRecorder(raises=FileNotFoundError("kiro-cli"))
-    )
+    monkeypatch.setattr(subprocess, "run", RunRecorder(raises=FileNotFoundError("kiro-cli")))
 
     with pytest.raises(AIGenerationError):
         AIGenerator(config).generate_code(
-            requirements, tmp_path / "assets", tmp_path / "project"
+            requirements, tmp_path / "assets", tmp_path / "project", job_id=JOB_ID
         )
 
 
@@ -153,7 +194,7 @@ def test_generate_code_rejects_non_gradle_output(
 
     with pytest.raises(AIGenerationError):
         AIGenerator(config).generate_code(
-            requirements, tmp_path / "assets", tmp_path / "project"
+            requirements, tmp_path / "assets", tmp_path / "project", job_id=JOB_ID
         )
 
 
@@ -165,6 +206,8 @@ def test_generate_code_no_timeout_passed(
     recorder = RunRecorder()
     monkeypatch.setattr(subprocess, "run", recorder)
 
-    AIGenerator(config).generate_code(requirements, tmp_path / "assets", tmp_path / "project")
+    AIGenerator(config).generate_code(
+        requirements, tmp_path / "assets", tmp_path / "project", job_id=JOB_ID
+    )
 
     assert "timeout" not in recorder.kwargs[0]

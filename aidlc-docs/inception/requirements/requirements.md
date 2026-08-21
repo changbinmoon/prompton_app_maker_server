@@ -1,5 +1,9 @@
 # Prompton AI Worker 요구사항 사양서
 
+## Status API 전환 우선 적용 공지
+
+DynamoDB 직접 접근, 상태 조회, 상태 갱신, 사용자 로그 저장 및 관련 IAM 조항은 `status-api-requirements.md`가 이 문서보다 우선한다. 기존 DynamoDB 조항은 구현 기준으로 사용하지 않는다.
+
 ## Intent Analysis
 
 | 항목 | 내용 |
@@ -355,9 +359,10 @@ jobs/{jobId}/
 
 | 항목 | 현재 상태 | 비고 |
 |------|-----------|------|
-| requirements.json 스키마 | 미정 | Backend 팀과 협의 필요 |
+| S3 Client 요청 계약 | 확정 및 Worker 구현 완료 | UTF-8 top-level JSON object, 최대 64 KiB, arbitrary fields 보존 |
 | 로그 및 모니터링 수준 | 미정 | 1차 구현 후 결정 가능 |
-| kiro-cli 호출 방식 상세 | 추후 정의 | CLI 인터페이스 확인 필요 |
+| kiro-cli 호출 방식 상세 | 2.18.1 `chat --no-interactive` 검증 완료 | `claude-opus-5`, fs_read/fs_write 제한 |
+| Hermes prompt refinement | Worker 구현 완료 | v0.20.4 one-shot, host provider/model, 3회 시도, raw Kiro fallback; live provider 검증 필요 |
 
 ---
 

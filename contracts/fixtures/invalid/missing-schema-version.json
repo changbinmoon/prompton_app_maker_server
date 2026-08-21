@@ -1,0 +1,13 @@
+{
+  "clientPayload": {
+    "requirements": "스키마 버전이 없는 요청"
+  },
+  "android": {
+    "applicationId": "com.example.invalid",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": []
+}

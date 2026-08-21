@@ -9,14 +9,26 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from models.enums import ERROR_MESSAGES, ErrorCode
+
+
+class StatusApiFailureKind(str, Enum):
+    """Status API 최종 실패 분류."""
+
+    HTTP_4XX = "HTTP_4XX"
+    HTTP_5XX = "HTTP_5XX"
+    HTTP_OTHER = "HTTP_OTHER"
+    CONNECTION = "CONNECTION"
+    TIMEOUT = "TIMEOUT"
 
 
 class WorkerError(Exception):
     """Worker 기본 예외.
 
     Attributes:
-        error_code: DynamoDB에 기록할 에러 코드
+        error_code: Backend에 보고할 승인된 에러 코드
         user_message: 사용자에게 표시할 한국어 메시지 (민감 정보 제외)
     """
 
@@ -32,6 +44,31 @@ class WorkerError(Exception):
         self.detail = detail
         self.user_message = user_message or ERROR_MESSAGES[self.error_code]
         super().__init__(detail or self.user_message)
+
+
+class StatusApiFailure(WorkerError):
+    """Status API 요청의 최종 실패.
+
+    API key, request payload, response body, 외부 예외 문자열은 보관하지 않는다.
+    """
+
+    error_code = ErrorCode.INTERNAL_ERROR
+
+    def __init__(
+        self,
+        kind: StatusApiFailureKind,
+        *,
+        status_code: int | None = None,
+        attempt_count: int,
+    ) -> None:
+        self.kind = kind
+        self.status_code = status_code
+        self.attempt_count = attempt_count
+        detail = (
+            "Status API request failed "
+            f"(kind={kind.value}, status_code={status_code}, attempts={attempt_count})"
+        )
+        super().__init__(detail=detail)
 
 
 class RequirementsReadError(WorkerError):

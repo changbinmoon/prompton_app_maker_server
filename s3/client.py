@@ -1,11 +1,10 @@
 """S3 클라이언트.
 
-설계 근거: logical-components.md 섹션 6, component-methods.md
+설계 근거: active component-methods.md, business-rules.md
 비즈니스 규칙:
-    BR-006 (artifactKey 기록 시점 - 업로드 성공 확인),
-    BR-014 (에셋 처리 - 없어도 정상, png/jpeg, 최대 5개),
-    BR-015 (APK 저장 위치), BR-016 (소스 코드 저장), BR-020 (requirements.json 유효성)
-NFR 패턴: Pattern 1 (retry)
+    BR-006 (검증된 artifactKey), BR-019 (raw requirements),
+    BR-020 (선택 에셋), BR-022 (빌드와 artifact), BR-023 (source upload)
+NFR 패턴: retained AWS SDK retry and verified completion barrier
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ from models.exceptions import (
     InvalidRequirementsError,
     RequirementsReadError,
 )
+from models.requirements import MAX_REQUIREMENTS_FILE_BYTES
 
 if TYPE_CHECKING:
     from models.entities import Config
@@ -62,7 +62,11 @@ class S3Client:
     def download_requirements(
         self, bucket: str, key: str, dest_path: Path
     ) -> dict[str, Any]:
-        """requirements.json을 다운로드하고 파싱한다.
+        """원본 Client JSON을 다운로드하고 안전한 ingress 조건만 검증한다.
+
+        Client payload는 임의 구조를 허용하며 Worker가 값을 변경하지 않는다. 이 경계에서는
+        문서 크기, UTF-8 JSON 구문, 최상위 object 여부만 검사하고 canonical schema를
+        강제하지 않는다.
 
         Args:
             bucket: 소스 버킷명
@@ -70,11 +74,11 @@ class S3Client:
             dest_path: 저장할 로컬 경로
 
         Returns:
-            파싱된 requirements 딕셔너리
+            파싱된 원본 Client JSON object
 
         Raises:
-            RequirementsReadError: S3 다운로드 실패
-            InvalidRequirementsError: JSON 파싱 실패 또는 최상위가 객체가 아닌 경우 (BR-020)
+            RequirementsReadError: S3 다운로드 또는 UTF-8 로컬 읽기 실패
+            InvalidRequirementsError: 크기, JSON 구문, 최상위 object 조건 위반 (BR-020)
         """
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -84,6 +88,21 @@ class S3Client:
             raise RequirementsReadError(
                 detail=f"requirements.json 다운로드 실패 (key={key}): {exc}"
             ) from exc
+
+        try:
+            file_size = dest_path.stat().st_size
+        except OSError as exc:
+            raise RequirementsReadError(
+                detail=f"requirements.json 파일 정보 조회 실패: {exc}"
+            ) from exc
+
+        if file_size > MAX_REQUIREMENTS_FILE_BYTES:
+            raise InvalidRequirementsError(
+                detail=(
+                    "requirements.json 크기 제한 초과 "
+                    f"(max={MAX_REQUIREMENTS_FILE_BYTES} bytes)"
+                )
+            )
 
         try:
             content = dest_path.read_text(encoding="utf-8")
@@ -102,7 +121,7 @@ class S3Client:
                 detail="requirements.json 최상위가 JSON 객체가 아닙니다"
             )
 
-        logger.info("requirements.json 다운로드 완료 (key=%s)", key)
+        logger.info("원본 Client JSON 다운로드 및 ingress 검증 완료 (key=%s)", key)
         return payload
 
     def download_assets(self, bucket: str, prefix: str, dest_dir: Path) -> list[Path]:
@@ -178,7 +197,7 @@ class S3Client:
         """빌드된 APK를 업로드하고 존재를 검증한다.
 
         BR-006: 업로드가 완전히 성공한 뒤에만 artifactKey를 반환한다.
-        호출자는 이 반환값을 받은 후에만 DynamoDB를 SUCCESS로 변경해야 한다.
+        호출자는 이 반환값을 받은 후에만 Status API SUCCESS를 필수로 반영해야 한다.
 
         Args:
             apk_path: 업로드할 로컬 APK 경로

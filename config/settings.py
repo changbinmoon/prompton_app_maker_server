@@ -22,8 +22,8 @@ BOTO_RETRY_MODE: Literal["legacy", "standard", "adaptive"] = "adaptive"
 #: 필수 환경 변수 목록 - 누락 시 프로세스를 시작하지 않는다
 REQUIRED_ENV_VARS = (
     "SQS_QUEUE_URL",
-    "DYNAMODB_TABLE_NAME",
     "S3_BUCKET_NAME",
+    "PROMPTON_API_BASE_URL",
 )
 
 #: 기본값
@@ -32,6 +32,7 @@ DEFAULT_WORK_DIR = "/data/jobs"
 DEFAULT_VISIBILITY_TIMEOUT = 300
 DEFAULT_CLEANUP_HOURS = 24
 DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_HERMES_CLI_PATH = "hermes"
 DEFAULT_KIRO_CLI_PATH = "kiro-cli"
 DEFAULT_GRADLE_PATH = "gradle"
 
@@ -54,7 +55,9 @@ def load_config() -> Config:
     Raises:
         ConfigError: 필수 환경 변수 누락 또는 값 형식 오류
     """
-    missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
+    missing = [
+        name for name in REQUIRED_ENV_VARS if not os.environ.get(name, "").strip()
+    ]
     if missing:
         raise ConfigError(f"필수 환경 변수가 설정되지 않았습니다: {', '.join(missing)}")
 
@@ -74,15 +77,24 @@ def load_config() -> Config:
     if not work_dir:
         raise ConfigError("WORK_DIR 값이 비어 있습니다")
 
+    prompton_api_base_url = os.environ["PROMPTON_API_BASE_URL"].strip().rstrip("/")
+    if not prompton_api_base_url:
+        raise ConfigError("PROMPTON_API_BASE_URL 값이 비어 있습니다")
+
+    raw_status_api_key = os.environ.get("PROMPTON_STATUS_API_KEY", "").strip()
+    prompton_status_api_key = raw_status_api_key or None
+
     return Config(
         aws_region=os.environ.get("AWS_REGION", DEFAULT_AWS_REGION),
         sqs_queue_url=os.environ["SQS_QUEUE_URL"],
-        dynamodb_table_name=os.environ["DYNAMODB_TABLE_NAME"],
         s3_bucket_name=os.environ["S3_BUCKET_NAME"],
+        prompton_api_base_url=prompton_api_base_url,
+        prompton_status_api_key=prompton_status_api_key,
         work_dir=work_dir,
         visibility_timeout=visibility_timeout,
         cleanup_hours=cleanup_hours,
         log_level=log_level,
+        hermes_cli_path=os.environ.get("HERMES_CLI_PATH", DEFAULT_HERMES_CLI_PATH),
         kiro_cli_path=os.environ.get("KIRO_CLI_PATH", DEFAULT_KIRO_CLI_PATH),
         gradle_path=os.environ.get("GRADLE_PATH", DEFAULT_GRADLE_PATH),
     )

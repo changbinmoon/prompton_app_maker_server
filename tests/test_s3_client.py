@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import boto3
 import pytest
@@ -15,13 +17,15 @@ from models.exceptions import (
     InvalidRequirementsError,
     RequirementsReadError,
 )
+from models.requirements import MAX_REQUIREMENTS_FILE_BYTES
 from s3.client import MAX_ASSET_COUNT, S3Client
 
 BUCKET = "test-bucket"
+type S3Setup = tuple[S3Client, Any]
 
 
 @pytest.fixture
-def s3_setup(config: Config):  # type: ignore[no-untyped-def]
+def s3_setup(config: Config) -> Iterator[S3Setup]:
     """moto S3 버킷과 S3Client를 준비한다."""
     with mock_aws():
         raw = boto3.client("s3", region_name="us-east-1")
@@ -29,20 +33,43 @@ def s3_setup(config: Config):  # type: ignore[no-untyped-def]
         yield S3Client(config, client=raw), raw
 
 
-def test_download_requirements_parses_json(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
-    """requirements.json을 다운로드하고 파싱한다."""
+def test_download_requirements_parses_raw_client_json(
+    s3_setup: S3Setup, tmp_path: Path, job_id: str
+) -> None:
+    """임의 구조의 원본 Client JSON object를 변경 없이 반환한다."""
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
-    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps({"appName": "demo"}).encode())
+    payload = {
+        "요청": "지렁이 게임을 만들어 주세요",
+        "aos": 34,
+        "custom": {"colors": ["green", "black"], "unknown": True},
+    }
+    raw.put_object(
+        Bucket=BUCKET,
+        Key=key,
+        Body=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+    )
 
     dest = tmp_path / "requirements.json"
     result = client.download_requirements(BUCKET, key, dest)
 
-    assert result == {"appName": "demo"}
+    assert result == payload
     assert dest.is_file()
+    assert json.loads(dest.read_text(encoding="utf-8")) == payload
 
 
-def test_download_requirements_missing_object(s3_setup, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+def test_download_requirements_accepts_empty_object(
+    s3_setup: S3Setup, tmp_path: Path, job_id: str
+) -> None:
+    """빈 object도 유효한 임의 Client JSON이다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    raw.put_object(Bucket=BUCKET, Key=key, Body=b"{}")
+
+    assert client.download_requirements(BUCKET, key, tmp_path / "r.json") == {}
+
+
+def test_download_requirements_missing_object(s3_setup: S3Setup, tmp_path: Path) -> None:
     """객체가 없으면 RequirementsReadError가 발생한다 (BR-008)."""
     client, _ = s3_setup
 
@@ -50,7 +77,7 @@ def test_download_requirements_missing_object(s3_setup, tmp_path: Path) -> None:
         client.download_requirements(BUCKET, "jobs/none/requirements.json", tmp_path / "r.json")
 
 
-def test_download_requirements_invalid_json(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+def test_download_requirements_invalid_json(s3_setup: S3Setup, tmp_path: Path, job_id: str) -> None:
     """JSON 파싱 실패 시 InvalidRequirementsError가 발생한다 (BR-020)."""
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
@@ -60,7 +87,19 @@ def test_download_requirements_invalid_json(s3_setup, tmp_path: Path, job_id: st
         client.download_requirements(BUCKET, key, tmp_path / "r.json")
 
 
-def test_download_requirements_non_object_json(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+def test_download_requirements_invalid_utf8(s3_setup: S3Setup, tmp_path: Path, job_id: str) -> None:
+    """UTF-8이 아닌 문서는 RequirementsReadError로 거부한다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    raw.put_object(Bucket=BUCKET, Key=key, Body=b'{"request":"\xff"}')
+
+    with pytest.raises(RequirementsReadError):
+        client.download_requirements(BUCKET, key, tmp_path / "r.json")
+
+
+def test_download_requirements_non_object_json(
+    s3_setup: S3Setup, tmp_path: Path, job_id: str
+) -> None:
     """최상위가 객체가 아니면 InvalidRequirementsError가 발생한다 (BR-020)."""
     client, raw = s3_setup
     key = f"jobs/{job_id}/requirements/requirements.json"
@@ -70,7 +109,34 @@ def test_download_requirements_non_object_json(s3_setup, tmp_path: Path, job_id:
         client.download_requirements(BUCKET, key, tmp_path / "r.json")
 
 
-def test_download_assets_returns_empty_when_none(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+def test_download_requirements_does_not_enforce_canonical_schema(
+    s3_setup: S3Setup, tmp_path: Path, job_id: str
+) -> None:
+    """Canonical 필드가 없는 임의 object도 Hermes 입력으로 허용한다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    payload = {"android": {"language": "Java"}, "unknownRoot": "preserved"}
+    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode("utf-8"))
+
+    assert client.download_requirements(BUCKET, key, tmp_path / "r.json") == payload
+
+
+def test_download_requirements_rejects_oversized_document(
+    s3_setup: S3Setup, tmp_path: Path, job_id: str
+) -> None:
+    """64 KiB를 초과하는 문서는 파싱 전에 거부한다."""
+    client, raw = s3_setup
+    key = f"jobs/{job_id}/requirements/requirements.json"
+    payload = {"padding": "x" * MAX_REQUIREMENTS_FILE_BYTES}
+    raw.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(payload).encode("utf-8"))
+
+    with pytest.raises(InvalidRequirementsError):
+        client.download_requirements(BUCKET, key, tmp_path / "r.json")
+
+
+def test_download_assets_returns_empty_when_none(
+    s3_setup: S3Setup, tmp_path: Path, job_id: str
+) -> None:
     """에셋이 없어도 정상 처리된다 (BR-014)."""
     client, _ = s3_setup
 
@@ -79,7 +145,9 @@ def test_download_assets_returns_empty_when_none(s3_setup, tmp_path: Path, job_i
     assert result == []
 
 
-def test_download_assets_filters_unsupported_types(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+def test_download_assets_filters_unsupported_types(
+    s3_setup: S3Setup, tmp_path: Path, job_id: str
+) -> None:
     """png/jpeg만 다운로드한다 (BR-014)."""
     client, raw = s3_setup
     prefix = f"jobs/{job_id}/assets/"
@@ -93,7 +161,7 @@ def test_download_assets_filters_unsupported_types(s3_setup, tmp_path: Path, job
     assert names == ["0-logo.png", "1-hero.jpg"]
 
 
-def test_download_assets_caps_at_max_count(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+def test_download_assets_caps_at_max_count(s3_setup: S3Setup, tmp_path: Path, job_id: str) -> None:
     """에셋은 최대 5개까지만 처리한다 (BR-014)."""
     client, raw = s3_setup
     prefix = f"jobs/{job_id}/assets/"
@@ -105,7 +173,7 @@ def test_download_assets_caps_at_max_count(s3_setup, tmp_path: Path, job_id: str
     assert len(result) == MAX_ASSET_COUNT
 
 
-def test_upload_source_creates_zip(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+def test_upload_source_creates_zip(s3_setup: S3Setup, tmp_path: Path, job_id: str) -> None:
     """프로젝트 디렉토리를 zip으로 업로드한다 (BR-016)."""
     client, raw = s3_setup
     project = tmp_path / "project"
@@ -120,14 +188,14 @@ def test_upload_source_creates_zip(s3_setup, tmp_path: Path, job_id: str) -> Non
     assert head["ContentLength"] > 0
 
 
-def test_upload_source_missing_dir_returns_empty(s3_setup, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+def test_upload_source_missing_dir_returns_empty(s3_setup: S3Setup, tmp_path: Path) -> None:
     """소스 디렉토리가 없으면 빈 문자열을 반환하고 예외를 던지지 않는다."""
     client, _ = s3_setup
 
     assert client.upload_source(tmp_path / "nope", "jobs/x/source/project.zip") == ""
 
 
-def test_upload_artifact_verifies_upload(s3_setup, tmp_path: Path, job_id: str) -> None:  # type: ignore[no-untyped-def]
+def test_upload_artifact_verifies_upload(s3_setup: S3Setup, tmp_path: Path, job_id: str) -> None:
     """APK 업로드 후 크기를 검증하고 키를 반환한다 (BR-006, BR-015)."""
     client, raw = s3_setup
     apk = tmp_path / "app-debug.apk"
@@ -141,7 +209,7 @@ def test_upload_artifact_verifies_upload(s3_setup, tmp_path: Path, job_id: str) 
     assert head["ContentLength"] == len(b"apk-content")
 
 
-def test_upload_artifact_missing_file(s3_setup, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+def test_upload_artifact_missing_file(s3_setup: S3Setup, tmp_path: Path) -> None:
     """APK 파일이 없으면 ArtifactUploadError가 발생한다 (BR-008)."""
     client, _ = s3_setup
 

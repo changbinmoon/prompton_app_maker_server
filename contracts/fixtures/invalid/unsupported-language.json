@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "지원하지 않는 언어 요청"
+  },
+  "android": {
+    "applicationId": "com.example.invalidlanguage",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Java",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": []
+}

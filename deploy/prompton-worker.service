@@ -32,10 +32,10 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/data/jobs
+# Status API, SQS, S3 및 로컬 도구 작업에 필요한 경로만 쓰기 허용
+ReadWritePaths=/data/jobs /data/hermes /data/gradle
 
-# Android SDK / Gradle 캐시 등 빌드 도구가 쓰기 필요한 경로가 있으면 여기에 추가한다.
-# 예) ReadWritePaths=/data/jobs /opt/android-sdk /home/prompton/.gradle
+# Android SDK에 쓰기가 필요한 별도 배포에서만 승인 후 해당 경로를 추가한다.
 
 [Install]
 WantedBy=multi-user.target

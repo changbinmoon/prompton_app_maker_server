@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prompton.dev/contracts/requirements/1.0/schema.json",
+  "title": "Prompton Canonical App Requirements",
+  "description": "Canonical requirements document produced by Backend and consumed by AI Worker.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "clientPayload",
+    "android",
+    "assets"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "clientPayload": {
+      "type": "object",
+      "description": "Original arbitrary Client JSON preserved for Hermes prompt refinement."
+    },
+    "android": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "applicationId",
+        "minSdk",
+        "targetSdk",
+        "language",
+        "uiToolkit"
+      ],
+      "properties": {
+        "applicationId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 255,
+          "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$"
+        },
+        "minSdk": {
+          "type": "integer",
+          "minimum": 21,
+          "maximum": 35,
+          "default": 26
+        },
+        "targetSdk": {
+          "type": "integer",
+          "minimum": 21,
+          "maximum": 35,
+          "default": 35
+        },
+        "language": {
+          "const": "Kotlin"
+        },
+        "uiToolkit": {
+          "const": "Jetpack Compose"
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fileName",
+          "contentType"
+        ],
+        "properties": {
+          "fileName": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 255,
+            "pattern": "^[^/\\\\]+\\.(?:png|jpg|jpeg)$"
+          },
+          "contentType": {
+            "enum": [
+              "image/png",
+              "image/jpeg"
+            ]
+          },
+          "purpose": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    }
+  }
+}

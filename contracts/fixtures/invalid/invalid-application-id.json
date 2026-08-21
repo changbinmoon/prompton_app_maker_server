@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "invalid application ID 요청"
+  },
+  "android": {
+    "applicationId": "Com.Example.Invalid-App",
+    "minSdk": 26,
+    "targetSdk": 35,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": []
+}

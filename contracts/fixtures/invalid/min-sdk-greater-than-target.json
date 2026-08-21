@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "1.0",
+  "clientPayload": {
+    "requirements": "SDK 순서가 잘못된 요청"
+  },
+  "android": {
+    "applicationId": "com.example.invalidsdk",
+    "minSdk": 35,
+    "targetSdk": 26,
+    "language": "Kotlin",
+    "uiToolkit": "Jetpack Compose"
+  },
+  "assets": []
+}
