@@ -1,158 +1,310 @@
-# Build Instructions
+# Build Instructions - ai-worker Status API Target
 
-## Scope
+## 1. Scope and Build Model
 
-This repository contains one Python application unit, `ai-worker`. It is configured with `tool.uv.package = false`, so the deployable artifact is the source tree plus `uv.lock`; no wheel or sdist is expected. The build gate consists of a frozen dependency sync, lockfile validation, Python bytecode compilation, and deployment-file presence checks.
+This repository contains one Python 3.12 Worker. `tool.uv.package = false`, so no wheel or sdist is produced. The release input is the source tree plus `pyproject.toml`, `uv.lock`, `deploy/prompton-worker.service`, and a protected deployment environment derived from `deploy/env.example`.
 
-## Prerequisites
+The local build gate validates dependency reproducibility, compilation, tests, static quality, Status API source boundaries, and deployment-file structure. It does not call the live Status API, mutate SQS/S3, run Hermes/Kiro, build a generated Android project, deploy the service, or change AWS/IAM/network resources.
 
-### Local quality build
-- Linux x86_64 or aarch64
-- Python 3.12; validated with Python 3.12.3
-- uv 0.8.12
-- Network access to the package registry only when the lockfile cache is cold
-- At least 2 GB free disk space for the virtual environment and caches
+## 2. Prerequisites
 
-### EC2 runtime and generated Android app build
-- Target sizing: t3.xlarge, 4 vCPU, 16 GB RAM, with `/data/jobs` on writable storage
-- `kiro-cli` 2.18.1 with authenticated model access
-- Model ID `claude-opus-5`
-- Gradle 9.7.0 or a version compatible with the generated project
-- Java and Android SDK versions compatible with the generated Android Gradle Plugin
-- EC2 Instance Profile with the SQS, S3, and DynamoDB permissions listed in the NFR design
-- systemd and a dedicated `prompton` service account
+### Local deterministic gate
 
-The validation host currently has kiro-cli 2.18.1, Gradle 9.7.0, Java 21.0.11, and an Android SDK at `/home/ubuntu/android-sdk`. The deployment template references Java 17 paths, so the EC2 image and `JAVA_HOME` must be aligned before service activation.
+- Linux host.
+- Python 3.12.
+- `uv` capable of reading the committed lockfile.
+- Git working tree containing the same revision of `pyproject.toml` and `uv.lock`.
+- Package-registry access only if the locked artifacts are not already cached.
 
-## Environment Variables
+Record rather than inventing a pass threshold for available disk:
 
-Required by the Worker at runtime:
+```bash
+python3 --version
+uv --version
+df -h . /tmp
+```
 
-| Variable | Purpose |
+### Target EC2 runtime readiness
+
+- Dedicated `prompton` user and group.
+- `/opt/prompton-ai-worker` source deployment.
+- `/data/jobs`, `/data/hermes`, and `/data/gradle` owned/writable as approved for the service identity.
+- Java, Android SDK, Gradle, Hermes, and Kiro CLI versions compatible with the existing Worker behavior.
+- EC2 Instance Profile with only approved SQS/S3 actions; no Worker DynamoDB action.
+- Outbound HTTPS/TCP 443 reachability to the approved API Gateway hostname.
+- systemd and journald.
+
+Target-host readiness is evidence collection, not authorization to start a Job.
+
+## 3. Configuration Contract
+
+Required Worker values:
+
+| Variable | Rule |
 |---|---|
-| `SQS_QUEUE_URL` | Main Job queue URL |
-| `DYNAMODB_TABLE_NAME` | Job-state table name |
-| `S3_BUCKET_NAME` | Input and output bucket |
+| `SQS_QUEUE_URL` | Nonblank URL for the approved queue. |
+| `S3_BUCKET_NAME` | Nonblank approved input/output bucket. |
+| `PROMPTON_API_BASE_URL` | Nonblank HTTPS Status API base; trailing slashes are normalized by the Worker. |
 
-Optional variables and defaults are documented in `deploy/env.example`: `AWS_REGION`, `WORK_DIR`, `VISIBILITY_TIMEOUT`, `CLEANUP_HOURS`, `LOG_LEVEL`, `KIRO_CLI_PATH`, `GRADLE_PATH`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`, `JAVA_HOME`, and `GRADLE_USER_HOME`.
+Optional Status API secret:
 
-Do not put AWS access keys or session tokens in the environment file. Use the EC2 Instance Profile.
+| Variable | Rule |
+|---|---|
+| `PROMPTON_STATUS_API_KEY` | Empty/whitespace means no header. A configured value is sent only as `x-api-key` and must not enter source, evidence, or logs. |
 
-## Build Steps
+Retained optional settings are documented in `deploy/env.example`: `AWS_REGION`, `WORK_DIR`, `VISIBILITY_TIMEOUT`, `CLEANUP_HOURS`, `LOG_LEVEL`, tool paths, `HERMES_HOME`, Android paths, and `GRADLE_USER_HOME`.
 
-Run all commands from the repository root.
+`DYNAMODB_TABLE_NAME` and static AWS credentials are not valid Worker configuration. Use the EC2 Instance Profile. Install the deployment environment as root-owned with group access limited to the service identity and mode 0640 or stricter.
 
-### 1. Install the pinned uv executable
+## 4. Local Build Gate
 
-If uv is already installed, verify it with `uv --version`. Otherwise install the official standalone release into the user-local path:
+Run from `/home/ubuntu/prompton_app_maker_server` or the checked-out repository root.
+
+### 4.1 Verify manifest and locked environment
 
 ```bash
 set -euo pipefail
-UV_VERSION=0.8.12
-case "$(uname -m)" in
-  x86_64) UV_TARGET=x86_64-unknown-linux-gnu ;;
-  aarch64|arm64) UV_TARGET=aarch64-unknown-linux-gnu ;;
-  *) echo "Unsupported architecture" >&2; exit 1 ;;
-esac
-TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
-curl --fail --location --silent --show-error \
-  "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz" \
-  --output "$TMP_DIR/uv.tar.gz"
-tar -xzf "$TMP_DIR/uv.tar.gz" -C "$TMP_DIR"
-install -d "$HOME/.local/bin"
-install -m 0755 "$TMP_DIR/uv-${UV_TARGET}/uv" "$HOME/.local/bin/uv"
-export PATH="$HOME/.local/bin:$PATH"
-uv --version
-```
-
-Expected version: `uv 0.8.12`.
-
-### 2. Synchronize locked dependencies
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-uv sync --extra dev --frozen
 uv lock --check
+uv sync --frozen --extra dev
 ```
 
-`--frozen` prevents an implicit lockfile update. A build must fail rather than silently changing dependency resolution.
+Expected direct runtime pins:
 
-### 3. Compile all application and test modules
+- `boto3==1.35.99`
+- `jsonschema==4.25.1`
+- `requests==2.34.2`
+
+Expected dev features are SQS/S3 only for moto and boto3 stubs.
+
+Verify the contract without changing the lockfile:
 
 ```bash
-uv run python -m compileall -q \
-  main.py ai build config dynamo models s3 sqs utils worker tests
+uv run python - <<'PY'
+from pathlib import Path
+
+manifest = Path("pyproject.toml").read_text(encoding="utf-8")
+lock = Path("uv.lock").read_text(encoding="utf-8")
+assert '"requests==2.34.2"' in manifest
+assert '"moto[sqs,s3]==5.0.28"' in manifest
+assert '"boto3-stubs[sqs,s3]==1.35.99"' in manifest
+assert "dynamodb" not in lock.lower()
+print("dependency contract passed")
+PY
 ```
 
-Successful compilation exits with status 0 and no output.
-
-### 4. Verify mandatory deployment files
+### 4.2 Compile all Python files
 
 ```bash
+uv run python -m compileall -q .
+```
+
+Success exits 0 without syntax errors. Generated bytecode is not a release artifact.
+
+### 4.3 Run executable quality gates
+
+```bash
+uv run pytest -q
+uv run ruff check .
+uv run mypy .
+```
+
+Current approved evidence:
+
+- pytest: 149 passed, 70 botocore deprecation warnings.
+- Ruff: passed.
+- strict mypy: passed for 39 files.
+
+Warnings are not failures, but any new category or count change must be reviewed. Do not globally suppress warnings to make the gate green.
+
+### 4.4 Verify required files and removed adapter
+
+```bash
+set -euo pipefail
 test -f pyproject.toml
 test -f uv.lock
+test -f main.py
+test -f status_api/__init__.py
+test -f status_api/client.py
 test -f deploy/env.example
 test -f deploy/prompton-worker.service
-test -f main.py
+test ! -e dynamo/client.py
+test ! -e dynamo/__init__.py
+test ! -e tests/test_dynamo_client.py
 ```
 
-### 5. Run quality gates
+### 4.5 Run Status API source-boundary checks
 
 ```bash
-uv run pytest
-uv run ruff check .
-uv run mypy main.py config models sqs s3 dynamo ai build utils worker
+uv run python - <<'PY'
+from pathlib import Path
+
+runtime_roots = ["main.py", "ai", "build", "config", "models", "s3", "sqs", "status_api", "utils", "worker"]
+files: list[Path] = []
+for item in runtime_roots:
+    path = Path(item)
+    files.extend([path] if path.is_file() else sorted(path.rglob("*.py")))
+text = "\n".join(path.read_text(encoding="utf-8") for path in files)
+for forbidden in (
+    "DynamoClient",
+    "DYNAMODB_TABLE_NAME",
+    "get_job_status",
+    "append_log",
+    "verify=False",
+    "disable_warnings",
+):
+    assert forbidden not in text, forbidden
+client = Path("status_api/client.py").read_text(encoding="utf-8")
+assert ".patch(" in client
+assert ".get(" not in client
+print(f"source boundary passed across {len(files)} runtime files")
+PY
 ```
 
-All commands must exit with status 0 before deployment.
+This is a source-boundary check, not a substitute for tests or deployed IAM inspection.
 
-## Build Outputs
+### 4.6 Verify environment template
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+
+text = Path("deploy/env.example").read_text(encoding="utf-8")
+for name in ("SQS_QUEUE_URL", "S3_BUCKET_NAME", "PROMPTON_API_BASE_URL"):
+    assert f"{name}=" in text
+assert "PROMPTON_STATUS_API_KEY=" in text
+assert "DYNAMODB_TABLE_NAME=" not in text
+for name in ("AWS_ACCESS_KEY_ID=", "AWS_SECRET_ACCESS_KEY=", "AWS_SESSION_TOKEN="):
+    assert name not in text
+line = next(line for line in text.splitlines() if line.startswith("PROMPTON_STATUS_API_KEY="))
+assert line == "PROMPTON_STATUS_API_KEY="
+print("environment template contract passed")
+PY
+```
+
+## 5. systemd Validation
+
+Production values must remain:
+
+```text
+WorkingDirectory=/opt/prompton-ai-worker
+ExecStart=/opt/prompton-ai-worker/.venv/bin/python -m main
+EnvironmentFile=/etc/prompton-worker/env
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=300
+ReadWritePaths=/data/jobs /data/hermes /data/gradle
+```
+
+Verify exact content locally:
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+
+text = Path("deploy/prompton-worker.service").read_text(encoding="utf-8")
+required = (
+    "User=prompton",
+    "Group=prompton",
+    "WorkingDirectory=/opt/prompton-ai-worker",
+    "ExecStart=/opt/prompton-ai-worker/.venv/bin/python -m main",
+    "EnvironmentFile=/etc/prompton-worker/env",
+    "Restart=on-failure",
+    "RestartSec=5",
+    "TimeoutStopSec=300",
+    "NoNewPrivileges=true",
+    "ProtectSystem=strict",
+    "ProtectHome=true",
+    "PrivateTmp=true",
+    "ReadWritePaths=/data/jobs /data/hermes /data/gradle",
+)
+for value in required:
+    assert value in text, value
+print("production service values passed")
+PY
+```
+
+On a target-compatible host where the production executable exists:
+
+```bash
+systemd-analyze verify deploy/prompton-worker.service
+```
+
+On a development host without `/opt/prompton-ai-worker/.venv/bin/python`, do not modify production `ExecStart`. Validate syntax with a temporary copy and separately retain the exact-content assertions:
+
+```bash
+set -euo pipefail
+tmp_unit="$(mktemp --suffix=.service)"
+trap 'rm -f "$tmp_unit"' EXIT
+sed \
+  -e "s#WorkingDirectory=/opt/prompton-ai-worker#WorkingDirectory=$(pwd)#" \
+  -e 's#ExecStart=/opt/prompton-ai-worker/.venv/bin/python -m main#ExecStart=/usr/bin/python3 -m main#' \
+  -e 's#EnvironmentFile=/etc/prompton-worker/env#EnvironmentFile=-/tmp/prompton-worker-env#' \
+  deploy/prompton-worker.service > "$tmp_unit"
+systemd-analyze verify "$tmp_unit"
+```
+
+The temporary substitution validates unit syntax only; it does not validate the deployed virtual environment or start the service.
+
+## 6. Build Outputs
 
 | Output | Location | Notes |
 |---|---|---|
-| Frozen Python environment | `.venv/` | Recreated with `uv sync --frozen`; do not deploy by copying between hosts |
-| Worker application | Repository source tree | Deploy source plus `pyproject.toml` and `uv.lock` |
-| systemd unit template | `deploy/prompton-worker.service` | Install as `/etc/systemd/system/prompton-worker.service` |
-| Environment template | `deploy/env.example` | Copy to `/etc/prompton-worker/env`, then set deployment values |
-| Runtime Android source | `${WORK_DIR}/{jobId}/project/` | Generated per Job by kiro-cli |
-| Runtime APK | `${WORK_DIR}/{jobId}/output/app-debug.apk` | Generated per Job by Gradle Wrapper |
+| Frozen local environment | `.venv/` | Reproducible workspace output; recreate on the deployment host. |
+| Worker release input | Source tree, `pyproject.toml`, `uv.lock` | No package artifact is expected. |
+| Service template | `deploy/prompton-worker.service` | Install only through an approved deployment procedure. |
+| Environment template | `deploy/env.example` | Copy values to a protected target file; never commit a real key. |
+| Runtime project/APK | `${WORK_DIR}/{jobId}/...` | Created only by an approved live Job, not by the local build gate. |
 
-## EC2 Deployment Build Check
+## 7. Target-Host Readiness Checks
 
-After copying the source to `/opt/prompton-ai-worker`:
+These commands are read-only but still require authorization to access the target host/environment:
 
 ```bash
-cd /opt/prompton-ai-worker
-sudo -u prompton env HOME=/home/prompton \
-  /home/prompton/.local/bin/uv sync --extra dev --frozen
-sudo install -m 0644 deploy/prompton-worker.service \
-  /etc/systemd/system/prompton-worker.service
-sudo systemctl daemon-reload
 sudo systemctl cat prompton-worker.service
+sudo stat -c '%U %G %a %n' /etc/prompton-worker/env
+sudo -u prompton test -w /data/jobs
+sudo -u prompton test -w /data/hermes
+sudo -u prompton test -w /data/gradle
+sudo journalctl -u prompton-worker --since '15 minutes ago' --no-pager
 ```
 
-Before starting the service, ensure every path named by `ReadWritePaths` exists and is writable by `prompton`. If `GRADLE_USER_HOME=/data/gradle` is used, add `/data/gradle` to `ReadWritePaths` and create it with the correct ownership.
+Separately verify:
 
-## Troubleshooting
+- Environment mode is 0640 or stricter and owner/group are approved.
+- Static AWS key names are absent.
+- Instance Profile policy has required SQS/S3 actions and no Worker DynamoDB actions.
+- TCP 443 reaches the configured API Gateway host without disabling TLS.
+- Queue/DLQ redrive attributes are recorded.
 
-### `uv: command not found`
-- Add `$HOME/.local/bin` to `PATH` or invoke `$HOME/.local/bin/uv` directly.
-- Verify the executable architecture and mode with `file ~/.local/bin/uv` and `ls -l ~/.local/bin/uv`.
+Do not start/restart the service or submit a Job merely to complete these read-only checks.
 
-### Frozen sync or lock check fails
-- Confirm `pyproject.toml` and `uv.lock` come from the same revision.
-- Do not remove `--frozen` in CI. Regenerate the lockfile only as an explicit dependency-update change.
+## 8. Troubleshooting
 
-### Python compilation or import fails
-- Confirm `python --version` is 3.12.x.
-- Delete only the reproducible environment with `rm -rf .venv`, then rerun the frozen sync.
+### Lock or frozen sync fails
 
-### kiro-cli exits with an unrecognized command
-- The Worker requires `kiro-cli chat --no-interactive`; `kiro-cli generate` is not supported by version 2.18.1.
-- Verify with `kiro-cli chat --help` and `kiro-cli chat --list-models --format json-pretty`.
+- Confirm `pyproject.toml` and `uv.lock` are from the same revision.
+- Preserve `--frozen`; regenerate the lock only in a separately reviewed dependency change.
+- Confirm the host can reach the configured package registry if cache entries are missing.
 
-### Android build fails
-- Check `java -version`, `gradle --version`, Android SDK packages, generated project Gradle Wrapper, and Android Gradle Plugin compatibility.
-- Ensure Gradle cache and Android SDK paths are writable under the systemd sandbox.
-- Review the sanitized Worker logs and the generated project under `${WORK_DIR}/{jobId}/project/`.
+### Compilation, Ruff, or mypy fails
+
+- Confirm Python is 3.12.
+- Fix source/type issues rather than reducing strictness or excluding files.
+- Rerun the focused check, then all three static gates.
+
+### Tests fail
+
+- Follow `unit-test-instructions.md` and rerun the exact node ID.
+- Confirm frozen versions were installed.
+- Ensure deterministic tests use fakes/moto and do not reach AWS or the Status API.
+
+### Direct systemd verification reports a missing executable
+
+- On this development host, the expected production `/opt` path is absent.
+- Use the documented temporary substitution for syntax only.
+- Require direct verification on the target-compatible host before activation.
+
+### Runtime Status API readiness fails
+
+- Confirm the normalized HTTPS base URL, optional-key mode, DNS, proxy/firewall, and TCP 443.
+- Never add `verify=False`, suppress TLS warnings, print the API key, or use Worker GET as a diagnostic workaround.

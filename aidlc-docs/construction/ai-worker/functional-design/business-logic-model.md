@@ -1,239 +1,302 @@
-# Business Logic Model - AI Worker
+# Business Logic Model - ai-worker Status API Target
 
-## 1. 상태 머신 (Job Status State Machine)
+## 1. Model Principles
 
-### 상태 정의
+- A processing attempt begins only with a validated `SQSMessage`.
+- Every delivery is processed from a clean workspace; there is no status read or resume point.
+- Local phase progression and Backend-observed status can diverge when a best-effort PATCH fails.
+- Status transport raises a typed final failure; the orchestrator selects best-effort or mandatory behavior.
+- Artifact verification and Backend SUCCESS must both complete before SQS acknowledgment.
 
-| 상태 | 설명 | Worker 진입 조건 |
-|------|------|-----------------|
-| UPLOAD_PENDING | 사용자 파일 업로드 대기 | Worker 관여 없음 |
-| QUEUED | SQS에 메시지 등록됨 | Worker 관여 없음 (Backend 설정) |
-| ANALYZING | 요구조건 분석 중 | Worker가 Job 수신 후 처리 시작 |
-| GENERATING_CODE | 코드 생성 중 | 요구조건 분석 완료 후 |
-| BUILDING | APK 빌드 중 | 코드 생성 완료 후 |
-| SUCCESS | 처리 완료 | APK S3 업로드 성공 후 |
-| FAILED | 처리 실패 | 어느 단계에서든 예외 발생 시 |
-| CANCELED | 취소됨 | Worker 관여 없음 (Backend 설정) |
+## 2. Per-Delivery Processing Flow
 
-### 상태 전이 규칙
-
-```
-QUEUED ──────────────────► ANALYZING
-  │                            │
-  │ (중복 확인: SUCCESS/       │ (requirements.json 다운로드,
-  │  CANCELED이면 skip)        │  assets 다운로드, 분석)
-  │                            │
-  │                            ▼
-  │                     GENERATING_CODE
-  │                            │
-  │                            │ (kiro-cli 코드 생성)
-  │                            │
-  │                            ▼
-  │                        BUILDING
-  │                            │
-  │                            │ (Gradle APK 빌드)
-  │                            │
-  │                            ▼
-  │                        SUCCESS
-  │                            
-  └─── (모든 단계에서) ──► FAILED
+```mermaid
+flowchart TD
+    RECEIVE["Receive validated SQSMessage"] --> PREP["Delete and recreate Job workspace"]
+    PREP --> VISIBILITY["Start visibility extension"]
+    VISIBILITY --> ANALYZING["Report ANALYZING best effort"]
+    ANALYZING --> INPUTS["Download and validate requirements and assets"]
+    INPUTS --> GENERATING["Report GENERATING_CODE best effort"]
+    GENERATING --> AI["Run Hermes then Kiro"]
+    AI --> BUILDING["Report BUILDING best effort"]
+    BUILDING --> BUILD["Build APK"]
+    BUILD --> SOURCE["Upload source best effort"]
+    SOURCE --> ARTIFACT["Upload artifact and verify HeadObject size"]
+    ARTIFACT --> SUCCESS["Report SUCCESS mandatory"]
+    SUCCESS --> SUCCESS_RESULT{"SUCCESS returned any 2xx"}
+    SUCCESS_RESULT -->|"Yes"| DELETE["Delete SQS message"]
+    SUCCESS_RESULT -->|"No"| INTERNAL["Classify INTERNAL_ERROR"]
+    INTERNAL --> FAILED_REPORT["Report FAILED best effort without progress"]
+    PROCESS_ERROR["Any processing error"] --> CLASSIFY["Preserve and classify original error"]
+    CLASSIFY --> FAILED_REPORT
+    FAILED_REPORT --> KEEP["Keep SQS message"]
+    DELETE --> STOP["Stop visibility extension"]
+    KEEP --> STOP
 ```
 
-### 전이 조건
+### Text Alternative
 
-| 현재 상태 | 다음 상태 | 전이 조건 |
-|-----------|-----------|-----------|
-| QUEUED | ANALYZING | Worker가 메시지를 수신하고 중복이 아닌 경우 |
-| ANALYZING | GENERATING_CODE | requirements.json 파싱 완료, assets 다운로드 완료 |
-| GENERATING_CODE | BUILDING | kiro-cli 코드 생성 성공 |
-| BUILDING | SUCCESS | APK 빌드 성공 + S3 업로드 성공 확인 |
-| 모든 상태 | FAILED | 해당 단계에서 복구 불가능한 에러 발생 |
-
----
-
-## 2. 메인 처리 시퀀스
-
-### 2.1 Main Loop
-
-```
-while not shutdown_requested:
-    1. message = sqs.receive_message()
-    2. if message is None:
-         continue (polling 대기)
-    3. process_job(message)
-    4. cleanup_old_workdirs()  # 24시간 초과 디렉토리 삭제
+```text
+Receive validated message and recreate the Job workspace.
+Start visibility extension and attempt ANALYZING.
+Download inputs, attempt GENERATING_CODE, run Hermes and Kiro.
+Attempt BUILDING, build APK, upload source, then upload and verify artifact.
+Attempt SUCCESS as mandatory. Any 2xx permits SQS deletion.
+A SUCCESS failure becomes INTERNAL_ERROR and attempts FAILED best-effort.
+Any processing failure preserves its own classification and attempts FAILED.
+Failure paths keep the SQS message. All paths stop visibility extension.
 ```
 
-### 2.2 process_job(message) 상세 흐름
+Intermediate status failure is not drawn as a branch because it logs and rejoins the next processing step immediately.
 
-```
-process_job(message):
+## 3. Main Loop Algorithm
+
+```text
+while shutdown is not requested:
+    remove work directories older than retention; warn and continue on cleanup failure
+
     try:
-        # Phase 0: 사전 검증
-        job_id = message.job_id
-        current_status = dynamo.get_job_status(job_id)
-        if current_status in [SUCCESS, CANCELED]:
-            sqs.delete_message(message.receipt_handle)
-            return  # 중복 처리 방지
+        message = receive and validate one SQS message
+    except invalid or receive error:
+        log sanitized error
+        continue without deletion
 
-        # Visibility Extender 시작
-        start_visibility_extender(message.receipt_handle)
+    if no message:
+        continue
 
-        # Phase 1: ANALYZING
-        dynamo.update_status(job_id, ANALYZING, 25, "요구조건을 분석하고 있습니다.")
-        dynamo.append_log(job_id, "[worker] 작업을 시작했습니다.")
+    process_job(message)
+```
 
-        requirements = s3.download_requirements(
-            message.requirements.bucket,
-            message.requirements.key
-        )
-        dynamo.append_log(job_id, "[worker] 요구조건 다운로드 완료")
+The loop never calls a status GET and never deletes an invalid/unprocessed message.
 
-        assets = s3.download_assets(
-            message.requirements.bucket,
-            message.assets_prefix,
-            work_dir / "assets"
-        )
-        if assets:
-            dynamo.append_log(job_id, f"[worker] 에셋 {len(assets)}개 다운로드 완료")
+## 4. `process_job` Algorithm
 
-        # Phase 2: GENERATING_CODE
-        dynamo.update_status(job_id, GENERATING_CODE, 50, "앱 코드를 생성하고 있습니다.")
-        dynamo.append_log(job_id, "[llm] 코드 생성 시작")
+```text
+process_job(message):
+    job_id = message.job_id
+    original_error = none
+    visibility = none
 
-        project_dir = ai.generate_code(
-            requirements_path=work_dir / "requirements.json",
-            assets_dir=work_dir / "assets",
-            output_dir=work_dir / "project"
-        )
-        dynamo.append_log(job_id, "[llm] 코드 생성 완료")
+    try:
+        work = derive JobWorkDir(job_id)
+        paths = derive S3Paths(job_id)
+        delete and recreate work.base_path
 
-        # Phase 3: BUILDING
-        dynamo.update_status(job_id, BUILDING, 75, "APK를 빌드하고 있습니다.")
-        dynamo.append_log(job_id, "[gradle] APK 빌드 시작")
+        visibility = start VisibilityExtender(message.receipt_handle)
 
-        apk_path = build.build_apk(project_dir)
-        dynamo.append_log(job_id, "[gradle] APK 빌드 완료")
+        report_intermediate(ANALYZING)       # catches final StatusApiFailure
+        download and validate raw requirements
+        download optional assets
 
-        # Phase 4: 업로드 및 완료
-        s3.upload_source(
-            project_dir,
-            bucket,
-            f"jobs/{job_id}/source/project.zip"
-        )
+        report_intermediate(GENERATING_CODE) # catches final StatusApiFailure
+        refined_prompt = run Hermes with bounded fallback
+        run Kiro using refined prompt or raw JSON fallback
 
-        artifact_key = s3.upload_artifact(
-            apk_path,
-            bucket,
-            f"jobs/{job_id}/artifact/app-debug.apk"
-        )
+        report_intermediate(BUILDING)        # catches final StatusApiFailure
+        build APK
 
-        # 순서 중요: S3 업로드 성공 확인 → DynamoDB SUCCESS → SQS 삭제
-        dynamo.update_status(job_id, SUCCESS, 100,
-            "앱 생성이 완료되었습니다.",
-            artifactKey=artifact_key
-        )
-        dynamo.append_log(job_id, "[worker] 작업 완료")
+        upload source best-effort
+        artifact_key = upload and verify APK # may raise ARTIFACT_UPLOAD_FAILED
 
-        sqs.delete_message(message.receipt_handle)
+        report_success_mandatory(artifact_key) # final failure propagates
 
-    except Exception as e:
-        # 실패 처리
-        error_code = classify_error(e)
-        dynamo.update_status(job_id, FAILED,
-            message=str(e),
-            errorCode=error_code
-        )
-        dynamo.append_log(job_id, f"[worker] 실패: {error_code}")
-        # SQS 메시지 삭제하지 않음 (재시도 가능)
+        try:
+            delete SQS message
+        except deletion error:
+            log acknowledgment failure
+            keep accepted SUCCESS; do not report contradictory FAILED
+
+    except any processing error as error:
+        original_error = error
+        report_failure_best_effort(original_error)
+        do not delete SQS message
 
     finally:
-        stop_visibility_extender()
+        stop visibility when it was started
 ```
 
----
+The local method catches exceptions so the main polling loop continues. “Propagates” above means from mandatory reporting into this method's processing-failure branch, not out of the Worker loop.
 
-## 3. Visibility Timeout 연장 로직
+## 5. Intermediate Status Algorithm
 
-### 연장 전략
-- **주기**: Queue Visibility Timeout의 50%
-- **예시**: Visibility Timeout = 300초 → 150초마다 연장
-- **동작**: 별도 스레드에서 주기적으로 ChangeMessageVisibility 호출
-- **종료 조건**: Job 처리 완료(성공/실패) 시 스레드 중지
+```text
+report_intermediate(status):
+    assert status is ANALYZING, GENERATING_CODE, or BUILDING
+    spec = exact StatusSpec for status
+    command = StatusUpdateCommand(job_id, spec fields)
 
-### 구현 흐름
-
-```
-visibility_extender_thread:
-    interval = queue_visibility_timeout * 0.5
-    while not stopped:
-        sleep(interval)
-        if not stopped:
-            sqs.extend_visibility(receipt_handle, queue_visibility_timeout)
+    try:
+        status_client.update_job_status(command fields)
+    except StatusApiFailure as reporting_error:
+        log status, failure kind, and attempt count without secrets
+        return
 ```
 
----
+No AI, build, S3, visibility, or SQS behavior depends on the return body or reporting success.
 
-## 4. 작업 디렉토리 관리
+## 6. Mandatory SUCCESS Algorithm
 
-### 디렉토리 구조
-```
-/data/jobs/{jobId}/
-├── requirements.json    # S3에서 다운로드
-├── assets/              # 에셋 이미지
-│   ├── 0-logo.png
-│   └── ...
-├── project/             # kiro-cli 생성 코드
-│   ├── app/
-│   ├── build.gradle
-│   ├── gradlew
-│   └── ...
-└── output/
-    └── app-debug.apk    # 빌드 결과
+```text
+report_success_mandatory(artifact_key):
+    command = StatusUpdateCommand(
+        status = SUCCESS,
+        progress = 100,
+        message = approved SUCCESS message,
+        artifact_key = verified artifact_key,
+        error_code = none,
+    )
+    status_client.update_job_status(command fields) # final failure is not caught here
 ```
 
-### 정리 정책
-- **보존 기간**: 24시간
-- **정리 시점**: 메인 루프 반복 시 오래된 디렉토리 확인
-- **정리 대상**: 생성 시간이 24시간을 초과한 작업 디렉토리
-- **실패한 Job**: 동일 정책 (24시간 보존 → 디버깅 가능)
+The caller can delete SQS only after this function returns normally.
 
----
+## 7. FAILED Reporting and Original-Error Preservation
 
-## 5. Graceful Shutdown 로직
+```text
+report_failure_best_effort(original_error):
+    original_code = classify_error(original_error)
+    original_message = safe_message_for(original_error)
 
+    command = StatusUpdateCommand(
+        status = FAILED,
+        progress = none,
+        message = original_message,
+        artifact_key = none,
+        error_code = original_code,
+    )
+
+    try:
+        status_client.update_job_status(command fields)
+    except StatusApiFailure as reporting_error:
+        log original_code plus sanitized reporting metadata
+
+    return original_code; never replace it with reporting_error
 ```
-handle_shutdown(signum, frame):
-    shutdown_requested = True
-    # 현재 처리 중인 단계가 있으면 해당 단계 완료까지 대기
-    # (sqs.receive_message 대기 중이면 즉시 종료)
 
-Main Loop 동작:
-    while not shutdown_requested:
-        message = sqs.receive_message()
-        if message:
-            process_job(message)  # 이 Job은 완료/실패까지 처리
-        # 루프 시작점에서 shutdown_requested 확인 → 다음 Job은 받지 않음
+When `original_error` is a final mandatory SUCCESS failure, `original_code` is INTERNAL_ERROR.
+
+## 8. Status API Decision Algorithm
+
+```mermaid
+flowchart TD
+    START["Build URL headers and payload"] --> SEND["PATCH with connect 3s and read 10s timeout"]
+    SEND --> RESULT{"Request outcome"}
+    RESULT -->|"Any 2xx"| SUCCESS["Return success without body parsing"]
+    RESULT -->|"4xx or other non-5xx failure"| FINAL["Raise sanitized StatusApiFailure"]
+    RESULT -->|"Connection error or timeout"| FINAL
+    RESULT -->|"5xx"| ATTEMPT{"Attempt is below 3"}
+    ATTEMPT -->|"Yes"| WAIT["Wait 1s after first or 2s after second"]
+    WAIT --> SEND
+    ATTEMPT -->|"No"| FINAL
 ```
 
----
+### Text Alternative
 
-## 6. kiro-cli 연동 모델
+```text
+Build endpoint, headers, and payload, then PATCH with timeout (3, 10).
+Any 2xx succeeds without response parsing.
+A 4xx, connection error, timeout, or other non-5xx failure fails immediately.
+A 5xx retries until three total attempts, waiting 1 second then 2 seconds.
+After the third 5xx, raise one sanitized final failure.
+```
 
-### 호출 방식
-- kiro-cli가 직접 requirements.json 파일 경로를 받아 처리
-- 타임아웃 없음 (완료까지 대기)
-- subprocess로 실행, stdout/stderr 수집
+### Decision Pseudocode
 
-### 입력
-- requirements.json 파일 경로
-- assets 디렉토리 경로 (있을 경우)
-- 출력 디렉토리 경로
+```text
+attempt = 1
+loop:
+    try:
+        response = PATCH(timeout = (3, 10))
+    except connection error:
+        raise StatusApiFailure(CONNECTION, attempts = attempt)
+    except connect or read timeout:
+        raise StatusApiFailure(TIMEOUT, attempts = attempt)
 
-### 출력
-- 생성된 Android 프로젝트 (출력 디렉토리에 작성)
-- exit code 0: 성공, 그 외: 실패
+    if 200 <= status < 300:
+        return success
 
-### 에러 처리
-- exit code != 0 → AI_GENERATION_FAILED
-- subprocess 예외(파일 없음 등) → AI_GENERATION_FAILED
+    if 500 <= status < 600:
+        if attempt == 3:
+            raise StatusApiFailure(HTTP_5XX, status, attempts = 3)
+        wait [1, 2][attempt - 1] seconds
+        attempt += 1
+        continue
+
+    if 400 <= status < 500:
+        raise StatusApiFailure(HTTP_4XX, status, attempts = attempt)
+
+    raise StatusApiFailure(HTTP_OTHER, status, attempts = attempt)
+```
+
+No branch parses successful JSON or logs a full response body.
+
+## 9. URL, Header, and Payload Transformation
+
+```text
+endpoint(job_id):
+    return base_url without trailing slash
+           + "/v1/jobs/" + validated job_id + "/status"
+
+headers():
+    result = {"Content-Type": "application/json"}
+    if normalized API key exists:
+        result["x-api-key"] = API key
+    return result without logging it
+
+payload(command):
+    result = {"status": command.status.value, "message": command.message}
+    add progress only when command.progress is not none
+    add artifactKey only when command.artifact_key is not none
+    add errorCode only when command.error_code is not none
+    return result
+```
+
+FAILED therefore cannot accidentally overwrite Backend progress with null or zero.
+
+## 10. Scenario Matrix
+
+| Scenario | Status result | Processing result | SQS result | FAILED result |
+|---|---|---|---|---|
+| All intermediate and SUCCESS commands return 2xx | All observed | Success | Delete after SUCCESS | Not called |
+| Intermediate command final 4xx/5xx/network failure | Warning | Continue | Determined by final Job result | Not caused by intermediate failure |
+| Requirements/AI/build/artifact failure | Earlier status may be stale | Fail with mapped code | Keep | Best-effort mapped FAILED |
+| Artifact verified; SUCCESS final failure | SUCCESS absent | Fail as INTERNAL_ERROR | Keep | Best-effort INTERNAL_ERROR |
+| FAILED command also fails | FAILED may be absent | Original failure unchanged | Keep | Reporting failure only logged |
+| SUCCESS 2xx; DeleteMessage fails | SUCCESS accepted | Job output remains successful | Message remains/redelivers | Not sent after accepted SUCCESS |
+| Redelivered Job | Re-emits from ANALYZING | Entire pipeline repeats | Delete only after new SUCCESS 2xx | Depends on new attempt |
+| Invalid SQS envelope without validated UUID | No endpoint call | Envelope rejected | Keep for redrive | Not addressable |
+
+## 11. Preserved Pipeline Models
+
+### Input and Assets
+- Raw requirements: at most 64 KiB, UTF-8 JSON, top-level object, arbitrary fields preserved.
+- Assets: PNG/JPEG, at most five, optional and best-effort.
+
+### Hermes and Kiro
+- Hermes: three attempts with 1-second/2-second backoff and strict output validation.
+- Hermes exhaustion: raw JSON fallback, not Job failure.
+- Kiro: no Worker timeout; failure maps to AI_GENERATION_FAILED.
+
+### Build and Output
+- BUILDING command occurs before Gradle.
+- Gradle wrapper/assembleDebug flow remains without Worker timeout.
+- Source upload is best-effort.
+- Artifact upload plus HeadObject/size verification is mandatory.
+
+### Workspace and Visibility
+- Every attempt recreates its Job directory.
+- Cleanup retains directories for configured age, default 24 hours.
+- Visibility extension failure is warning-only; extender stops on all Job paths.
+
+## 12. Functional Acceptance Mapping
+
+| Acceptance area | Functional model evidence |
+|---|---|
+| Exact payload contract | StatusSpec, StatusUpdateCommand, BR-005, transformation algorithm |
+| No GET and full reprocessing | BR-001, process flow, scenario matrix |
+| Intermediate degradation | Intermediate algorithm and criticality table |
+| Verified completion | Finalization order and mandatory SUCCESS algorithm |
+| Failure preservation | FAILED algorithm and scenario matrix |
+| HTTP predictability | Decision diagram, pseudocode, and failure entity |
+| Protected observability | Business logging rules and sanitized failure value |
+| Joint E2E boundary | Backend GET/Mobile observe externally; Worker production flow remains PATCH-only |

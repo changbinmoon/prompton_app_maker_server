@@ -1,214 +1,259 @@
-# Integration Test Instructions
+# Integration Test Instructions - ai-worker Status API Target
 
-## Purpose
+## 1. Purpose and Safety Boundary
 
-Validate interactions among the single Worker unit's modules and its external dependencies: SQS, S3, DynamoDB, kiro-cli, Gradle, and the Android SDK. Local component integration is safe and repeatable. Live integration mutates AWS dev resources and consumes model/build capacity, so run it only in an isolated test environment or during an approved test window.
+Validate interactions among the single Worker unit's internal components and its external boundaries: Backend Status API, SQS, S3, Hermes, Kiro, Gradle/Android, systemd, and journald.
 
-## Test Layers
+Two layers are intentionally separate:
 
-| Layer | Services | Current status |
+| Layer | Authorization | Status |
 |---|---|---|
-| Local component integration | boto3 with moto, orchestrator with injected dependencies | Executed in the local suite; passed |
-| CLI compatibility | Installed Hermes and kiro-cli command discovery | Hermes v0.20.4 and kiro-cli 2.18.1 confirmed non-destructively |
-| Live service integration | Real SQS, S3, DynamoDB, Hermes model, kiro-cli model, Gradle/Android | Not executed; requires approved AWS/model usage and a Backend-stored raw Client JSON object |
+| Local component integration with fakes/moto | Allowed local deterministic gate | Passed within the 149-test suite. |
+| Target-host readiness and live joint integration | Requires approved environment, Job ID, participants, and test window | Not executed by instruction generation. |
 
-## Local Integration Suite
+A live run can mutate Backend state, SQS, and S3; consume Hermes/Kiro capacity; and build an Android project. Do not execute live commands, start/restart the service, submit a Job, alter queue attributes, or clean cloud data without explicit approval.
+
+## 2. Local Component Integration
+
+Prepare the frozen environment and run the interaction-heavy suites:
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-uv sync --extra dev --frozen
-uv run pytest \
-  tests/test_s3_client.py \
-  tests/test_dynamo_client.py \
+set -euo pipefail
+uv lock --check
+uv sync --frozen --extra dev
+uv run pytest -q \
+  tests/test_status_api_client.py \
   tests/test_orchestrator.py \
+  tests/test_sqs_client.py \
+  tests/test_s3_client.py \
   tests/test_visibility_extender.py \
   tests/test_prompt_refiner.py \
   tests/test_ai_generator.py \
   tests/test_builder.py
 ```
 
-Key interactions covered:
-- S3 raw JSON object download/validation, asset filtering, archive upload, APK upload, and post-upload size verification
-- DynamoDB status, progress, artifact key, and append-only logs through moto
-- Orchestrator ordering from ANALYZING through Hermes, Kiro, BUILDING, and SUCCESS
-- Hermes one-shot command, 3-attempt backoff, output validation, and Kiro raw fallback
-- Failure-to-FAILED mapping and preservation of failed SQS messages
-- Visibility extension lifecycle
-- kiro-cli and Gradle subprocess command construction through deterministic fakes
+Covered interactions:
 
-## Live Integration Prerequisites
+- Exact Status API URL/header/payload, timeout, any-2xx, and 5xx-only retry behavior.
+- Orchestrator command sequence and intermediate-reporting degradation.
+- Full redelivery with workspace recreation and no status read/preflight skip.
+- Artifact upload and HeadObject/size verification before SUCCESS.
+- Accepted SUCCESS before SQS deletion.
+- FAILED omission/original-error preservation and post-SUCCESS delete-failure behavior.
+- SQS long polling, one-message processing, deletion, and visibility extension.
+- S3 raw requirements/assets/source/artifact behavior.
+- Hermes refinement/fallback, Kiro command, and Gradle build interactions through deterministic recorders.
 
-1. Use dedicated test SQS/DLQ, S3, and DynamoDB resources whenever possible.
-2. Confirm the EC2 Instance Profile has only the required permissions.
-3. Confirm that the Backend stores a UTF-8 top-level Client JSON object no larger than 64 KiB and enqueues its S3 pointer.
-4. Provision `HERMES_HOME` for the service user and confirm tool compatibility:
+Expected result: 101 tests pass across these eight files. The complete release gate remains all 149 tests.
 
-```bash
-hermes --version
-hermes --help
-hermes config get model.provider
-hermes config get model.default
-kiro-cli --version
-kiro-cli chat --help
-kiro-cli chat --list-models --format json-pretty
-gradle --version
-java -version
-test -d "$ANDROID_HOME"
-```
+## 3. Target-Host Readiness (No Job Submission)
 
-5. Load the test environment without static AWS keys:
+Run only with authorization to inspect the dev/test host and AWS account.
+
+### 3.1 Load protected configuration without printing it
 
 ```bash
+set -euo pipefail
 set -a
+# shellcheck disable=SC1091
 source /etc/prompton-worker/env
 set +a
+: "${SQS_QUEUE_URL:?required}"
+: "${S3_BUCKET_NAME:?required}"
+: "${PROMPTON_API_BASE_URL:?required}"
+```
+
+Never run `env`, `set`, `curl -v`, shell tracing, or commands that print `PROMPTON_STATUS_API_KEY`.
+
+### 3.2 Record identity and read-only AWS readiness
+
+```bash
 aws sts get-caller-identity
 aws sqs get-queue-attributes \
   --queue-url "$SQS_QUEUE_URL" \
   --attribute-names VisibilityTimeout RedrivePolicy
 aws s3api head-bucket --bucket "$S3_BUCKET_NAME"
-aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME"
 ```
 
-## Scenario 1: Successful Job Across All Dependencies
+Record sanitized outputs. The expected redrive planning value is `maxReceiveCount=3`; if deployed configuration differs, stop and obtain owner review rather than modifying it.
 
-### Setup
-
-Use a representative raw Client JSON object before invoking the models:
+### 3.3 Verify HTTPS/TCP 443 and certificate validation
 
 ```bash
-set -euo pipefail
-JOB_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
-REQ_FILE="/tmp/requirements-${JOB_ID}.json"
-cat > "$REQ_FILE" <<'JSON'
-{
-  "request": "Backend-approved deterministic Android smoke application",
-  "aos": 34,
-  "applicationId": "com.prompton.integration.smoke",
-  "preferences": {
-    "language": "Kotlin",
-    "ui": "Jetpack Compose"
-  }
-}
-JSON
+python3 - <<'PY'
+import os
+import socket
+import ssl
+from urllib.parse import urlparse
 
-aws dynamodb put-item \
-  --table-name "$DYNAMODB_TABLE_NAME" \
-  --item "{\"jobId\":{\"S\":\"${JOB_ID}\"},\"status\":{\"S\":\"QUEUED\"},\"progress\":{\"N\":\"10\"}}"
-
-aws s3 cp "$REQ_FILE" \
-  "s3://${S3_BUCKET_NAME}/jobs/${JOB_ID}/requirements/requirements.json"
-
-MESSAGE_BODY="$(python3 - "$JOB_ID" "$S3_BUCKET_NAME" <<'PY'
-import json
-import sys
-job_id, bucket = sys.argv[1:]
-print(json.dumps({
-    "schemaVersion": "1.0",
-    "jobId": job_id,
-    "requirements": {
-        "bucket": bucket,
-        "key": f"jobs/{job_id}/requirements/requirements.json",
-    },
-    "assetsPrefix": f"jobs/{job_id}/assets/",
-}))
+url = os.environ["PROMPTON_API_BASE_URL"]
+parsed = urlparse(url)
+assert parsed.scheme == "https"
+assert parsed.hostname
+context = ssl.create_default_context()
+with socket.create_connection((parsed.hostname, 443), timeout=3) as raw:
+    with context.wrap_socket(raw, server_hostname=parsed.hostname) as tls:
+        print("TLS", tls.version(), "host", parsed.hostname)
 PY
-)"
-
-aws sqs send-message \
-  --queue-url "$SQS_QUEUE_URL" \
-  --message-body "$MESSAGE_BODY"
-printf 'JOB_ID=%s\n' "$JOB_ID"
 ```
+
+This is a non-mutating TLS handshake. It does not validate the PATCH schema or authorize disabling verification.
+
+### 3.4 Verify service and filesystem readiness
+
+```bash
+sudo systemctl cat prompton-worker.service
+sudo systemctl is-enabled prompton-worker.service
+sudo stat -c '%U %G %a %n' /etc/prompton-worker/env
+sudo -u prompton test -w /data/jobs
+sudo -u prompton test -w /data/hermes
+sudo -u prompton test -w /data/gradle
+```
+
+Do not start/restart the service as part of readiness inspection.
+
+### 3.5 Verify external tools non-destructively
+
+```bash
+hermes --version
+hermes --help
+kiro-cli --version
+kiro-cli chat --help
+gradle --version
+java -version
+test -d "$ANDROID_HOME"
+```
+
+Do not invoke Hermes one-shot, Kiro chat generation, or Gradle on a generated project until the test window is approved.
+
+## 4. Joint Success-Path Integration Scenario
+
+### Preconditions
+
+- A dedicated dev/test environment and unique approved Job ID.
+- Backend participant able to create the Job, store the raw requirements object, enqueue its S3 pointer, and perform Backend GET observations.
+- Worker operator, S3/SQS evidence owner, and Mobile observer identified.
+- Target commit/revision deployed through an approved process.
+- Status API authentication mode confirmed; any key is injected through the protected environment only.
+- IAM policy inspected: approved SQS/S3 actions present and Worker DynamoDB actions absent.
+- Dedicated queue/DLQ attributes recorded.
+- Evidence destination created without secrets.
 
 ### Execution
 
-Run the Worker from a dedicated terminal or start the test EC2 service:
+1. Record the commit SHA, UTC start time, environment, Job ID, queue, bucket, and participants.
+2. Have the Backend submit one approved deterministic dev Job. Do not bypass Backend ownership unless a dedicated harness procedure is separately approved.
+3. Observe sanitized Worker journald events for that Job ID.
+4. Have the Backend observer record GET-visible states; the Worker itself must not issue GET.
+5. Have the Mobile observer record user-visible progress/final status.
+6. After SUCCESS, read S3 object metadata and record SQS deletion/queue evidence.
+7. Download the APK only to the approved evidence host, calculate SHA-256, and optionally inspect it with Android tooling.
+
+Sanitized Worker observation:
 
 ```bash
-cd /opt/prompton-ai-worker
-sudo systemctl start prompton-worker
-sudo journalctl -u prompton-worker -f
+mkdir -p test-results/integration
+sudo journalctl \
+  -u prompton-worker \
+  --since "$TEST_START_UTC" \
+  --no-pager \
+  | grep -F "$JOB_ID" \
+  > "test-results/integration/${JOB_ID}-worker.log"
 ```
 
-Poll the Job from another terminal:
+Before sharing, inspect the captured file for raw requirements, keys, credentials, signed URLs, response bodies, and internal secrets.
 
-```bash
-while true; do
-  STATUS="$(aws dynamodb get-item \
-    --table-name "$DYNAMODB_TABLE_NAME" \
-    --key "{\"jobId\":{\"S\":\"${JOB_ID}\"}}" \
-    --projection-expression '#s' \
-    --expression-attribute-names '{"#s":"status"}' \
-    --query 'Item.#s.S' --output text)"
-  printf '%s status=%s\n' "$(date -u +%FT%TZ)" "$STATUS"
-  case "$STATUS" in SUCCESS|FAILED) break ;; esac
-  sleep 15
-done
-```
-
-### Expected Results
-
-- Status order is ANALYZING, GENERATING_CODE, BUILDING, SUCCESS.
-- Progress values are 25, 50, 75, 100.
-- Hermes start plus either completion or raw-fallback is recorded; valid output creates `${WORK_DIR}/${JOB_ID}/refined-prompt.md`.
-- Kiro receives the original JSON and assets in both paths and the refined prompt when available.
-- Required logs are appended without Client values, credentials, or signed URLs.
-- `jobs/${JOB_ID}/source/project.zip` exists when source upload succeeds.
-- `jobs/${JOB_ID}/artifact/app-debug.apk` exists and has non-zero size.
-- DynamoDB `artifactKey` equals the APK key.
-- The SQS message is deleted only after SUCCESS.
-- `${WORK_DIR}/${JOB_ID}` is isolated with owner-only permissions.
-
-Verify outputs:
+Artifact metadata after observed SUCCESS:
 
 ```bash
 aws s3api head-object \
   --bucket "$S3_BUCKET_NAME" \
-  --key "jobs/${JOB_ID}/artifact/app-debug.apk"
-aws dynamodb get-item \
-  --table-name "$DYNAMODB_TABLE_NAME" \
-  --key "{\"jobId\":{\"S\":\"${JOB_ID}\"}}" \
-  --consistent-read
+  --key "jobs/${JOB_ID}/artifact/app-debug.apk" \
+  --query '{ContentLength:ContentLength,ETag:ETag,LastModified:LastModified}'
 ```
 
-### Cleanup
+Expected lifecycle:
 
-```bash
-aws s3 rm "s3://${S3_BUCKET_NAME}/jobs/${JOB_ID}/" --recursive
-aws dynamodb delete-item \
-  --table-name "$DYNAMODB_TABLE_NAME" \
-  --key "{\"jobId\":{\"S\":\"${JOB_ID}\"}}"
-rm -f "/tmp/requirements-${JOB_ID}.json"
-```
+1. Worker PATCHes ANALYZING (25).
+2. Worker PATCHes GENERATING_CODE (50).
+3. Worker PATCHes BUILDING (75).
+4. Worker uploads and verifies the APK.
+5. Worker PATCHes SUCCESS (100 plus exact artifact key).
+6. Status API returns 2xx.
+7. Worker calls SQS DeleteMessage.
+8. Backend GET and Mobile show SUCCESS with the same artifact result.
 
-Do not purge a shared queue. If the test fails before message deletion, remove only the identified test message or allow the dedicated test queue's redrive policy to handle it.
+Intermediate state observation may miss a short-lived state due to polling timing. The evidence must still establish PATCH acceptance through sanitized Worker/Backend records without exposing response bodies.
 
-## Scenario 2: Failure and Retry Semantics
+## 5. Controlled Failure Scenarios
 
-Run only on a dedicated test queue.
+Execute only if each fault injection is approved and reversible.
 
-1. Submit a Job whose requirements object is valid JSON but deliberately causes a deterministic generation failure.
-2. Verify FAILED contains the expected `errorCode`, retains the last progress value, and has no internal path in the user message.
-3. Verify the SQS message is not deleted.
-4. Verify redelivery after Visibility Timeout and DLQ movement after `maxReceiveCount=3`.
-5. Delete all test resources after recording the receive count and DLQ evidence.
+### 5.1 Intermediate Status API failure
 
-## Scenario 3: Visibility Extension
+Use a Backend-owned test stub or routing mechanism; do not change production DNS/firewalls. Cause one intermediate status command to end in final failure.
 
-Use a valid test Job whose generation lasts longer than one configured Visibility Timeout.
+Expected:
 
-1. Set the dedicated queue Visibility Timeout to a known safe value.
-2. Observe `ChangeMessageVisibility` in CloudTrail or instrumented logs.
-3. Verify extensions occur at approximately 50% of the timeout.
-4. Confirm no second Worker receives the same Job while the lease is extended.
-5. Confirm processing remains idempotent if one extension call is deliberately denied.
+- Warning event includes Job ID, status, failure class, and attempts.
+- AI/build flow continues.
+- No key, payload, body, or raw exception text appears.
 
-## Integration Logs
+### 5.2 SUCCESS final failure
 
-- Worker service: `journalctl -u prompton-worker`
-- Job-visible logs: DynamoDB `logs`
-- SQS delivery evidence: queue attributes and CloudWatch metrics
-- Local generated project and APK: `${WORK_DIR}/${JOB_ID}`
+Cause SUCCESS reporting to fail only in the dedicated environment.
 
-Redact Job content and all credentials before sharing logs.
+Expected:
+
+- Verified artifact may exist.
+- Worker classifies completion as `INTERNAL_ERROR` and attempts best-effort FAILED.
+- SQS message is not deleted.
+- Redelivery performs the full pipeline again.
+
+### 5.3 Delete failure after accepted SUCCESS
+
+Cause only DeleteMessage to fail after Backend accepted SUCCESS.
+
+Expected:
+
+- SUCCESS remains authoritative.
+- Worker emits a sanitized acknowledgment warning.
+- Worker sends no contradictory FAILED.
+- Message can redeliver and the full pipeline can repeat.
+
+### 5.4 Processing failure
+
+Use a deterministic approved build/generation failure.
+
+Expected:
+
+- FAILED contains the original safe message and approved error code.
+- FAILED omits progress and artifact key.
+- Message is retained and eventually follows the dedicated queue redrive policy.
+
+## 6. Evidence and Cleanup
+
+Required sanitized evidence:
+
+- Commit SHA and UTC timestamps.
+- Job ID and approved environment identifiers.
+- Worker status-attempt outcomes without response bodies.
+- Backend GET state observations supplied by Backend.
+- Mobile observations supplied by Mobile.
+- S3 key, ContentLength, and downloaded APK SHA-256.
+- SQS deletion or queue-state/redrive evidence.
+- Queue VisibilityTimeout and RedrivePolicy.
+- Environment owner/group/mode, IAM review, and TLS handshake result.
+
+Cleanup must be performed by the resource owner using the unique Job ID and dedicated prefixes. Never purge a shared queue, delete unrelated objects, rotate shared credentials, or weaken IAM/firewall/TLS settings. If a failed test message remains, coordinate receipt-handle deletion or allow the dedicated DLQ policy to retain it for diagnosis.
+
+## 7. Exit Criteria
+
+Local integration is complete when focused suites and the full 149-test gate pass. Joint integration is complete only when the approved evidence bundle proves:
+
+- Backend accepts repeated state commands and same accepted SUCCESS on redelivery.
+- Artifact verification precedes SUCCESS.
+- SUCCESS 2xx precedes SQS deletion.
+- Backend GET/Mobile final result matches the S3 artifact.
+- Required security/readiness evidence is present.
+- No sensitive value appears in evidence.

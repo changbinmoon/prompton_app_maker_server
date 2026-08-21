@@ -1,11 +1,9 @@
 """SQS 클라이언트.
 
-설계 근거: logical-components.md 섹션 6, component-methods.md
-비즈니스 규칙:
-    BR-002 (메시지 삭제 시점), BR-003 (실패 시 메시지 유지),
-    BR-010 (Visibility Timeout 연장), BR-011 (연장 실패 처리),
-    BR-019 (SQS 메시지 유효성)
-NFR 패턴: Pattern 1 (retry), Pattern 11 (Long Polling)
+설계 근거: active logical-components.md and component-methods.md
+비즈니스 규칙: BR-002/003 (삭제 gate와 실패 보존), BR-016/017 (visibility),
+    BR-018 (message validation)
+NFR: NFR-PERF-003, NFR-REL-003, NFR-REL-006
 """
 
 from __future__ import annotations

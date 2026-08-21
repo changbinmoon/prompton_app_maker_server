@@ -1,113 +1,228 @@
-# Security Test Instructions
+# Security Test Instructions - ai-worker Status API Target
 
-## Scope and Extension Status
+## 1. Scope and Extension Status
 
-The optional Security Baseline extension is disabled, so extension-specific rules are not a blocking AI-DLC gate. The project's own NFRs still require least-privilege IAM, credential-free AWS authentication, sensitive-log redaction, and owner-only work directories. These checks validate those explicit requirements.
+The optional Security Baseline extension is disabled and is N/A for extension compliance. Project-specific requirements remain mandatory: least-privilege Worker IAM, default TLS verification, protected optional API key, protected environment/workspaces, systemd hardening, and zero sensitive log disclosure.
 
-## Existing Automated Security Behavior Tests
+Instruction generation does not authorize dependency downloads, scanner network access, AWS calls, IAM changes, target-host access, or live Status API requests. Run those sections only in an approved CI/test environment.
+
+## 2. Automated Security Behavior Gate
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
-uv sync --extra dev --frozen
-uv run pytest \
+set -euo pipefail
+uv sync --frozen --extra dev
+uv run pytest -q \
+  tests/test_status_api_client.py \
+  tests/test_orchestrator.py \
+  tests/test_config.py \
+  tests/test_main.py \
   tests/test_cleanup.py \
-  tests/test_dynamo_client.py \
   tests/test_s3_client.py \
   tests/test_sqs_client.py
 ```
 
-Relevant behavior includes AWS key, token, signed URL, bearer token, and credential assignment redaction; safe user failure messages; supported asset filtering; path basename handling; and owner-only Job work directories.
+Expected: 106 tests pass.
 
-## Dependency Vulnerability Audit
+Security-relevant behaviors:
 
-Use pinned, ephemeral scanner versions without modifying project dependencies:
+- Optional key sent only through `x-api-key` and absent when blank.
+- Key excluded from Config repr, exceptions, and captured logs.
+- Payload, Backend body, raw external exception text, Client JSON, Hermes output, credentials, and signed URLs excluded from logs.
+- Requests uses default TLS verification with no disable option.
+- FAILED messages use approved safe text/error codes.
+- Job workspace uses owner-only permissions where POSIX modes are available.
+- Input/asset/path boundaries remain validated.
+
+## 3. Static Status API Security Checks
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+uv run python - <<'PY'
+from pathlib import Path
+
+roots = ["main.py", "ai", "build", "config", "models", "s3", "sqs", "status_api", "utils", "worker", "deploy"]
+files: list[Path] = []
+for item in roots:
+    path = Path(item)
+    if path.is_file():
+        files.append(path)
+    else:
+        files.extend(sorted(path.rglob("*.py")))
+        files.extend(sorted(path.rglob("*.service")))
+        files.extend(sorted(path.rglob("*.example")))
+text = "\n".join(path.read_text(encoding="utf-8") for path in files)
+for forbidden in (
+    "verify=False",
+    "disable_warnings",
+    "DynamoClient",
+    "DYNAMODB_TABLE_NAME",
+    "get_job_status",
+    "append_log",
+):
+    assert forbidden not in text, forbidden
+client = Path("status_api/client.py").read_text(encoding="utf-8")
+assert ".patch(" in client
+assert ".get(" not in client
+print(f"security boundary passed across {len(files)} files")
+PY
+```
+
+## 4. Credential and Secret Scan
+
+Scan production/config/deployment files. Tests are excluded because they intentionally use sentinel values.
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+import re
+
+roots = ["main.py", "ai", "build", "config", "models", "s3", "sqs", "status_api", "utils", "worker", "deploy"]
+patterns = (
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"ASIA[0-9A-Z]{16}"),
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"(?i)aws_(?:secret_access_key|session_token)\s*[:=]\s*\S+"),
+)
+for item in roots:
+    path = Path(item)
+    files = [path] if path.is_file() else [p for p in path.rglob("*") if p.is_file()]
+    for file in files:
+        try:
+            text = file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for pattern in patterns:
+            assert not pattern.search(text), f"potential secret in {file}"
+print("production secret scan passed")
+PY
+```
+
+A match requires review; never copy the matched value into an issue or evidence bundle.
+
+## 5. Optional Pinned Dependency and Static Scanners
+
+These commands download pinned ephemeral tools and contact advisory/package services. Run only with approved network access; they do not modify project dependencies.
+
+```bash
+set -euo pipefail
+tmp_requirements="$(mktemp)"
+trap 'rm -f "$tmp_requirements"' EXIT
 uv export --frozen --all-extras --format requirements-txt \
-  --output-file /tmp/prompton-requirements.txt
+  --output-file "$tmp_requirements"
 uvx --from pip-audit==2.9.0 pip-audit \
-  --requirement /tmp/prompton-requirements.txt
-rm -f /tmp/prompton-requirements.txt
-```
-
-Review every finding for exploitability in both runtime and development dependencies. Do not suppress a finding without a documented rationale and expiry.
-
-## Static Security Scan
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
+  --requirement "$tmp_requirements"
 uvx --from bandit==1.8.6 bandit -r \
-  main.py ai build config dynamo models s3 sqs utils worker
+  main.py ai build config models s3 sqs status_api utils worker
 ```
 
-Any High severity finding is release-blocking. Review Medium findings and document disposition.
+Disposition rules:
 
-## Credential and Secret Review
+- Review every vulnerability against the exact locked version and reachable Worker behavior.
+- Do not suppress a finding without owner, rationale, and expiry.
+- Any Bandit High finding blocks release; review/document every Medium finding.
+- Pin/version changes require a separately reviewed dependency update and new frozen lock.
 
-Search application and deployment files, excluding tests that intentionally contain fake credentials:
+## 6. Optional API Key and Environment Protection
 
-```bash
-if grep -RInE \
-  'AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|aws_secret_access_key|aws_session_token|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' \
-  main.py ai build config dynamo models s3 sqs utils worker deploy; then
-  echo 'Potential secret material found; review required' >&2
-  exit 1
-fi
-```
-
-Also verify `/etc/prompton-worker/env` contains no `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or `AWS_SESSION_TOKEN`:
+On the authorized target host:
 
 ```bash
+sudo stat -c '%U %G %a %n' /etc/prompton-worker/env
 sudo grep -En '^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)=' \
   /etc/prompton-worker/env && exit 1 || true
 ```
 
-## IAM Least-Privilege Test
+Pass conditions:
 
-From the EC2 instance, verify allowed actions required by the Worker and explicitly test that unrelated administrative actions are denied. Use only dedicated test resources.
+- Mode 0640 or stricter.
+- Owner/group limited to administrator and service identity.
+- No static AWS key names.
+- `PROMPTON_STATUS_API_KEY` may be absent/empty or securely injected; never print its value.
+- systemd does not expose it through command-line arguments.
 
-Required actions:
-- SQS: ReceiveMessage, DeleteMessage, ChangeMessageVisibility, GetQueueAttributes
-- S3: GetObject for requirements/assets, ListBucket for the assets prefix, PutObject for source/artifact
-- DynamoDB: GetItem and UpdateItem on the Job table
+Do not attach the environment file or `systemctl show ... Environment` output to evidence.
 
-Prohibited policy patterns:
-- `Action: "*"`
-- `Resource: "*"` where a service-level API does not require it
-- AdministratorAccess attached to the instance role
-- Static AWS credentials in code, environment files, user data, or systemd overrides
+## 7. IAM Least-Privilege Review
 
-Use IAM Access Analyzer policy validation before attachment when a deployable IAM policy document is available.
+No Worker IAM/IaC policy file exists in this repository. Inspect the deployed Instance Profile through the authorized infrastructure process.
 
-## systemd Sandbox Review
+Required Worker actions:
+
+- SQS: ReceiveMessage, DeleteMessage, ChangeMessageVisibility, GetQueueAttributes.
+- S3: GetObject for requirements/assets, constrained ListBucket for asset prefixes, PutObject for source/artifact, and permissions needed for artifact metadata verification.
+
+Required negative evidence:
+
+- No Worker DynamoDB action/resource.
+- No wildcard administrator policy.
+- No unrelated mutation or role-management actions.
+- No static credentials in user data, environment files, systemd overrides, or source.
+
+Do not change or detach policies while performing review. Policy remediation is an infrastructure change requiring separate approval.
+
+## 8. TLS and Network Review
+
+Source scan and fake-session assertions must show no certificate-verification override. On the target host, perform a default-context TLS handshake only:
+
+```bash
+set -a
+# shellcheck disable=SC1091
+source /etc/prompton-worker/env
+set +a
+python3 - <<'PY'
+import os
+import socket
+import ssl
+from urllib.parse import urlparse
+
+parsed = urlparse(os.environ["PROMPTON_API_BASE_URL"])
+assert parsed.scheme == "https" and parsed.hostname
+context = ssl.create_default_context()
+with socket.create_connection((parsed.hostname, 443), timeout=3) as raw:
+    with context.wrap_socket(raw, server_hostname=parsed.hostname) as tls:
+        print("verified", parsed.hostname, tls.version())
+PY
+```
+
+Pass condition: outbound TCP 443 and certificate/hostname verification succeed without proxy bypass or warning suppression.
+
+## 9. systemd Sandbox Review
+
+Repository checks:
 
 ```bash
 systemd-analyze verify deploy/prompton-worker.service
-systemd-analyze security prompton-worker.service
-sudo systemctl cat prompton-worker.service
 ```
 
-Confirm:
-- `NoNewPrivileges=true`
-- `ProtectSystem=strict`
-- `ProtectHome=true`
-- `PrivateTmp=true`
-- Only required writable paths are in `ReadWritePaths`
-- `/data/jobs` and any configured `GRADLE_USER_HOME` are owned by the service user
-- Environment file mode is 0640 or stricter
+On the installed target:
 
-If `/data/gradle` or an Android SDK path must be writable, explicitly add the narrow path rather than weakening `ProtectSystem` globally.
+```bash
+systemd-analyze security prompton-worker.service
+sudo systemctl cat prompton-worker.service
+sudo -u prompton test -w /data/jobs
+sudo -u prompton test -w /data/hermes
+sudo -u prompton test -w /data/gradle
+```
 
-## AI Tool Boundary Review
+Required values:
 
-The Worker invokes kiro-cli with:
-- `--no-interactive`
-- `--model claude-opus-5`
-- `--trust-tools=fs_read,fs_write`
+- `NoNewPrivileges=true`.
+- `ProtectSystem=strict`.
+- `ProtectHome=true`.
+- `PrivateTmp=true`.
+- Explicit `ReadWritePaths=/data/jobs /data/hermes /data/gradle`.
+- Dedicated `prompton` user/group.
 
-Do not change this to `--trust-all-tools` for untrusted user requirements. The Job directory must remain isolated, and the service user must not have write access outside approved data paths.
+The local development host may fail direct verify only because the production `/opt` executable is absent. Use the temporary syntax procedure in `build-instructions.md`; require direct target verification before activation.
 
-## Current Execution Status
+## 10. Evidence Gate
 
-Log-redaction and input-handling tests passed within the 132-test suite. Dependency audit, Bandit, live IAM denial testing, and installed-service sandbox scoring were not executed in this local session; run them in CI or the isolated EC2 test environment before production activation.
+| Control | Local evidence | External evidence |
+|---|---|---|
+| Key confinement/log exclusion | Tests and source scan | Sanitized journald review |
+| TLS verification | Source/fake assertions | Default-context target handshake |
+| IAM least privilege | No runtime DynamoDB dependency | Deployed policy inspection |
+| Environment protection | Template checks | Owner/group/mode and static-key-name check |
+| Workspace/systemd | Unit tests and unit assertions | Installed sandbox/path inspection |
+| Dependency/static scan | Optional pinned CI commands | Reviewed finding dispositions |
+
+Security acceptance requires all applicable project-specific controls. Security Baseline extension status remains N/A and does not waive these requirements.

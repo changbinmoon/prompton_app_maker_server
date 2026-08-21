@@ -1,5 +1,9 @@
 # Prompton AI Worker 요구사항 사양서
 
+## Status API 전환 우선 적용 공지
+
+DynamoDB 직접 접근, 상태 조회, 상태 갱신, 사용자 로그 저장 및 관련 IAM 조항은 `status-api-requirements.md`가 이 문서보다 우선한다. 기존 DynamoDB 조항은 구현 기준으로 사용하지 않는다.
+
 ## Intent Analysis
 
 | 항목 | 내용 |

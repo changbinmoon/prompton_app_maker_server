@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from models.exceptions import InvalidRequirementsError
 from models.requirements import REQUIREMENTS_SCHEMA_PATH, validate_requirements

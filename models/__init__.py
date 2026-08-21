@@ -11,6 +11,8 @@ from models.exceptions import (
     BuildError,
     InvalidRequirementsError,
     RequirementsReadError,
+    StatusApiFailure,
+    StatusApiFailureKind,
     WorkerError,
 )
 
@@ -28,5 +30,7 @@ __all__ = [
     "RequirementsReadError",
     "S3Paths",
     "SQSMessage",
+    "StatusApiFailure",
+    "StatusApiFailureKind",
     "WorkerError",
 ]

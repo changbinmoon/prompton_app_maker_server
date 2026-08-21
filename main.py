@@ -73,7 +73,7 @@ def main() -> int:
     logger.info("Prompton AI Worker 시작")
     logger.info("Region=%s", config.aws_region)
     logger.info("Queue=%s", config.sqs_queue_url)
-    logger.info("Table=%s", config.dynamodb_table_name)
+    logger.info("StatusApiBase=%s", config.prompton_api_base_url)
     logger.info("Bucket=%s", config.s3_bucket_name)
     logger.info("WorkDir=%s", config.work_dir)
 

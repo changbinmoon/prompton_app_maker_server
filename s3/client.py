@@ -1,11 +1,10 @@
 """S3 클라이언트.
 
-설계 근거: logical-components.md 섹션 6, component-methods.md
+설계 근거: active component-methods.md, business-rules.md
 비즈니스 규칙:
-    BR-006 (artifactKey 기록 시점 - 업로드 성공 확인),
-    BR-014 (에셋 처리 - 없어도 정상, png/jpeg, 최대 5개),
-    BR-015 (APK 저장 위치), BR-016 (소스 코드 저장), BR-020 (raw Client JSON 유효성)
-NFR 패턴: Pattern 1 (retry)
+    BR-006 (검증된 artifactKey), BR-019 (raw requirements),
+    BR-020 (선택 에셋), BR-022 (빌드와 artifact), BR-023 (source upload)
+NFR 패턴: retained AWS SDK retry and verified completion barrier
 """
 
 from __future__ import annotations
@@ -198,7 +197,7 @@ class S3Client:
         """빌드된 APK를 업로드하고 존재를 검증한다.
 
         BR-006: 업로드가 완전히 성공한 뒤에만 artifactKey를 반환한다.
-        호출자는 이 반환값을 받은 후에만 DynamoDB를 SUCCESS로 변경해야 한다.
+        호출자는 이 반환값을 받은 후에만 Status API SUCCESS를 필수로 반영해야 한다.
 
         Args:
             apk_path: 업로드할 로컬 APK 경로

@@ -1,14 +1,9 @@
-"""worker.orchestrator 단위 테스트.
-
-핵심 비즈니스 규칙 검증:
-    BR-001 (중복 처리 방지), BR-002 (메시지 삭제 시점), BR-003 (실패 시 유지),
-    BR-004 (상태 전이 순서), BR-007 (progress 규칙), BR-008 (에러 분류),
-    BR-017 (디렉토리 재생성), BR-018 (정리)
-"""
+"""WorkerOrchestrator tests for the Status API target lifecycle."""
 
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -16,14 +11,28 @@ import pytest
 
 from models.entities import Config, SQSMessage
 from models.enums import ErrorCode, JobStatus
-from models.exceptions import AIGenerationError, ArtifactUploadError, BuildError
+from models.exceptions import (
+    AIGenerationError,
+    ArtifactUploadError,
+    BuildError,
+    RequirementsReadError,
+    StatusApiFailure,
+    StatusApiFailureKind,
+)
 from worker.orchestrator import WorkerOrchestrator
 
 
 class FakeSQSClient:
-    def __init__(self, messages: list[SQSMessage | None] | None = None) -> None:
-        self.messages: list[SQSMessage | None] = messages or []
+    def __init__(
+        self,
+        messages: list[SQSMessage | None] | None = None,
+        events: list[str] | None = None,
+    ) -> None:
+        self.messages = list(messages or [])
+        self.events = events if events is not None else []
         self.deleted: list[str] = []
+        self.delete_attempts = 0
+        self.delete_error: Exception | None = None
         self.extended: list[tuple[str, int]] = []
         self.visibility_timeout = 300
         self.receive_error: Exception | None = None
@@ -37,6 +46,10 @@ class FakeSQSClient:
         return self.messages.pop(0)
 
     def delete_message(self, receipt_handle: str) -> None:
+        self.delete_attempts += 1
+        self.events.append("sqs_delete")
+        if self.delete_error is not None:
+            raise self.delete_error
         self.deleted.append(receipt_handle)
 
     def extend_visibility(self, receipt_handle: str, timeout_seconds: int) -> None:
@@ -46,39 +59,38 @@ class FakeSQSClient:
         return self.visibility_timeout
 
 
-class FakeDynamoClient:
-    def __init__(self, initial_status: JobStatus | None = JobStatus.QUEUED) -> None:
-        self.status: JobStatus | None = initial_status
+class FakeStatusApiClient:
+    def __init__(self, events: list[str] | None = None) -> None:
+        self.events = events if events is not None else []
         self.updates: list[dict[str, Any]] = []
-        self.logs: list[str] = []
-        self.get_error: Exception | None = None
+        self.failures: dict[JobStatus, list[BaseException]] = {}
 
-    def get_job_status(self, job_id: str) -> JobStatus | None:
-        if self.get_error is not None:
-            raise self.get_error
-        return self.status
+    def fail_next(self, status: JobStatus, error: BaseException) -> None:
+        self.failures.setdefault(status, []).append(error)
 
-    def update_status(
+    def update_job_status(
         self,
         job_id: str,
         status: JobStatus,
         progress: int | None = None,
         message: str | None = None,
-        error_code: ErrorCode | None = None,
         artifact_key: str | None = None,
+        error_code: ErrorCode | None = None,
     ) -> None:
+        self.events.append(f"status:{status.value}")
         self.updates.append(
             {
+                "job_id": job_id,
                 "status": status,
                 "progress": progress,
                 "message": message,
-                "error_code": error_code,
                 "artifact_key": artifact_key,
+                "error_code": error_code,
             }
         )
-
-    def append_log(self, job_id: str, message: str) -> None:
-        self.logs.append(message)
+        failures = self.failures.get(status)
+        if failures:
+            raise failures.pop(0)
 
     @property
     def status_sequence(self) -> list[JobStatus]:
@@ -86,7 +98,8 @@ class FakeDynamoClient:
 
 
 class FakeS3Client:
-    def __init__(self) -> None:
+    def __init__(self, events: list[str] | None = None) -> None:
+        self.events = events if events is not None else []
         self.uploaded_source: list[str] = []
         self.uploaded_artifact: list[str] = []
         self.assets: list[Path] = []
@@ -94,28 +107,31 @@ class FakeS3Client:
         self.artifact_error: Exception | None = None
 
     def download_requirements(
-        self, bucket: str, key: str, dest_path: Path
+        self,
+        bucket: str,
+        key: str,
+        dest_path: Path,
     ) -> dict[str, Any]:
+        self.events.append("requirements")
         if self.download_error is not None:
             raise self.download_error
-        payload: dict[str, Any] = {
-            "request": "demo Android app",
-            "aos": 34,
-            "custom": {"theme": "green"},
-        }
+        payload: dict[str, Any] = {"request": "demo", "custom": {"theme": "green"}}
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         dest_path.write_text(json.dumps(payload), encoding="utf-8")
         return payload
 
     def download_assets(self, bucket: str, prefix: str, dest_dir: Path) -> list[Path]:
+        self.events.append("assets")
         dest_dir.mkdir(parents=True, exist_ok=True)
         return list(self.assets)
 
     def upload_source(self, project_dir: Path, key: str) -> str:
+        self.events.append("source_upload")
         self.uploaded_source.append(key)
         return key
 
     def upload_artifact(self, apk_path: Path, key: str) -> str:
+        self.events.append("artifact_verify")
         if self.artifact_error is not None:
             raise self.artifact_error
         self.uploaded_artifact.append(key)
@@ -128,7 +144,10 @@ class FakePromptRefiner:
         self.calls: list[tuple[Path, Path, str]] = []
 
     def refine(
-        self, requirements_path: Path, output_path: Path, job_id: str
+        self,
+        requirements_path: Path,
+        output_path: Path,
+        job_id: str,
     ) -> Path | None:
         self.calls.append((requirements_path, output_path, job_id))
         if not self.succeeds:
@@ -175,6 +194,34 @@ class FakeApkBuilder:
         return output_apk_path
 
 
+class RecordingVisibilityExtender:
+    instances: list[RecordingVisibilityExtender] = []
+
+    def __init__(
+        self,
+        sqs_client: object,
+        receipt_handle: str,
+        visibility_timeout: int,
+    ) -> None:
+        self.receipt_handle = receipt_handle
+        self.visibility_timeout = visibility_timeout
+        self.started = 0
+        self.stopped = 0
+        self.__class__.instances.append(self)
+
+    def start(self) -> None:
+        self.started += 1
+
+    def stop(self) -> None:
+        self.stopped += 1
+
+
+def status_failure(
+    kind: StatusApiFailureKind = StatusApiFailureKind.HTTP_5XX,
+) -> StatusApiFailure:
+    return StatusApiFailure(kind, status_code=503, attempt_count=3)
+
+
 @pytest.fixture
 def message(job_id: str) -> SQSMessage:
     return SQSMessage(
@@ -189,299 +236,262 @@ def message(job_id: str) -> SQSMessage:
 
 def build_orchestrator(
     config: Config,
+    *,
+    events: list[str] | None = None,
     sqs: FakeSQSClient | None = None,
-    dynamo: FakeDynamoClient | None = None,
+    status: FakeStatusApiClient | None = None,
     s3: FakeS3Client | None = None,
     refiner: FakePromptRefiner | None = None,
     ai: FakeAIGenerator | None = None,
     builder: FakeApkBuilder | None = None,
 ) -> tuple[WorkerOrchestrator, dict[str, Any]]:
-    """의존성이 주입된 오케스트레이터와 대역 모음을 생성한다."""
-    deps = {
-        "sqs": sqs or FakeSQSClient(),
-        "dynamo": dynamo or FakeDynamoClient(),
-        "s3": s3 or FakeS3Client(),
+    recorder = events if events is not None else []
+    deps: dict[str, Any] = {
+        "sqs": sqs or FakeSQSClient(events=recorder),
+        "status": status or FakeStatusApiClient(events=recorder),
+        "s3": s3 or FakeS3Client(events=recorder),
         "refiner": refiner or FakePromptRefiner(),
         "ai": ai or FakeAIGenerator(),
         "builder": builder or FakeApkBuilder(),
     }
     orchestrator = WorkerOrchestrator(
         config,
-        sqs_client=deps["sqs"],  # type: ignore[arg-type]
-        s3_client=deps["s3"],  # type: ignore[arg-type]
-        dynamo_client=deps["dynamo"],  # type: ignore[arg-type]
-        prompt_refiner=deps["refiner"],  # type: ignore[arg-type]
-        ai_generator=deps["ai"],  # type: ignore[arg-type]
-        apk_builder=deps["builder"],  # type: ignore[arg-type]
+        sqs_client=deps["sqs"],
+        s3_client=deps["s3"],
+        status_client=deps["status"],
+        prompt_refiner=deps["refiner"],
+        ai_generator=deps["ai"],
+        apk_builder=deps["builder"],
     )
     return orchestrator, deps
 
 
-# ------------------------------------------------------------- 정상 흐름
-
-
-def test_process_job_happy_path(config: Config, message: SQSMessage) -> None:
-    """정상 처리 시 상태 전이 순서와 삭제 시점이 규칙을 따른다 (BR-002, BR-004)."""
-    orchestrator, deps = build_orchestrator(config)
+def test_process_job_happy_path_exact_payloads_and_order(
+    config: Config,
+    message: SQSMessage,
+) -> None:
+    events: list[str] = []
+    orchestrator, deps = build_orchestrator(config, events=events)
 
     orchestrator.process_job(message)
 
-    dynamo: FakeDynamoClient = deps["dynamo"]
-    sqs: FakeSQSClient = deps["sqs"]
-    s3: FakeS3Client = deps["s3"]
-
-    assert dynamo.status_sequence == [
+    status: FakeStatusApiClient = deps["status"]
+    assert status.status_sequence == [
         JobStatus.ANALYZING,
         JobStatus.GENERATING_CODE,
         JobStatus.BUILDING,
         JobStatus.SUCCESS,
     ]
-    assert sqs.deleted == ["rh-1"]
-    assert s3.uploaded_artifact == [f"jobs/{message.job_id}/artifact/app-debug.apk"]
-    assert s3.uploaded_source == [f"jobs/{message.job_id}/source/project.zip"]
-
-
-def test_process_job_sets_fixed_progress_values(config: Config, message: SQSMessage) -> None:
-    """상태별 progress 고정값이 사용된다 (BR-007)."""
-    orchestrator, deps = build_orchestrator(config)
-
-    orchestrator.process_job(message)
-
-    dynamo: FakeDynamoClient = deps["dynamo"]
-    progresses = [update["progress"] for update in dynamo.updates]
-    assert progresses == [25, 50, 75, 100]
-
-
-def test_process_job_records_artifact_key_on_success(
-    config: Config, message: SQSMessage
-) -> None:
-    """SUCCESS 전이 시에만 artifactKey를 기록한다 (BR-006)."""
-    orchestrator, deps = build_orchestrator(config)
-
-    orchestrator.process_job(message)
-
-    dynamo: FakeDynamoClient = deps["dynamo"]
-    success = dynamo.updates[-1]
-    assert success["status"] == JobStatus.SUCCESS
-    assert success["artifact_key"] == f"jobs/{message.job_id}/artifact/app-debug.apk"
-    assert all(update["artifact_key"] is None for update in dynamo.updates[:-1])
-
-
-def test_process_job_writes_required_logs(config: Config, message: SQSMessage) -> None:
-    """필수 로그 시점이 모두 기록된다 (BR-012)."""
-    orchestrator, deps = build_orchestrator(config)
-
-    orchestrator.process_job(message)
-
-    logs: list[str] = deps["dynamo"].logs
-    assert "[worker] 작업을 시작했습니다." in logs
-    assert "[worker] 요구조건 다운로드 완료" in logs
-    assert "[hermes] 프롬프트 정제 시작" in logs
-    assert "[hermes] 프롬프트 정제 완료" in logs
-    assert "[llm] 코드 생성 시작" in logs
-    assert "[llm] 코드 생성 완료" in logs
-    assert "[gradle] APK 빌드 시작" in logs
-    assert "[gradle] APK 빌드 완료" in logs
-    assert "[worker] 작업 완료" in logs
-
-
-def test_process_job_uses_raw_fallback_when_hermes_fails(
-    config: Config, message: SQSMessage
-) -> None:
-    """Hermes 최대 시도 실패는 Job 실패가 아니라 raw Kiro fallback으로 이어진다."""
-    orchestrator, deps = build_orchestrator(
-        config, refiner=FakePromptRefiner(succeeds=False)
-    )
-
-    orchestrator.process_job(message)
-
-    assert deps["dynamo"].status_sequence[-1] == JobStatus.SUCCESS
-    assert "[hermes] 프롬프트 정제 실패 - 원본 요구조건으로 계속" in deps["dynamo"].logs
-    ai: FakeAIGenerator = deps["ai"]
-    assert ai.calls[0][4] is None
+    assert [(u["progress"], u["message"]) for u in status.updates] == [
+        (25, "요구조건을 분석하고 있습니다."),
+        (50, "Android 코드를 생성하고 있습니다."),
+        (75, "APK를 빌드하고 있습니다."),
+        (100, "앱 생성이 완료되었습니다."),
+    ]
+    artifact_key = f"jobs/{message.job_id}/artifact/app-debug.apk"
+    assert status.updates[-1]["artifact_key"] == artifact_key
+    assert events.index("artifact_verify") < events.index("status:SUCCESS")
+    assert events.index("status:SUCCESS") < events.index("sqs_delete")
     assert deps["sqs"].deleted == ["rh-1"]
-
-
-def test_process_job_logs_asset_count_when_present(
-    config: Config, message: SQSMessage, tmp_path: Path
-) -> None:
-    """에셋이 있으면 개수 로그가 추가된다 (BR-012, BR-014)."""
-    s3 = FakeS3Client()
-    s3.assets = [tmp_path / "0-logo.png", tmp_path / "1-hero.png"]
-    orchestrator, deps = build_orchestrator(config, s3=s3)
-
-    orchestrator.process_job(message)
-
-    assert "[worker] 에셋 2개 다운로드 완료" in deps["dynamo"].logs
-
-
-def test_process_job_no_asset_log_when_absent(config: Config, message: SQSMessage) -> None:
-    """에셋이 없으면 에셋 로그가 없고 정상 처리된다 (BR-014)."""
-    orchestrator, deps = build_orchestrator(config)
-
-    orchestrator.process_job(message)
-
-    assert not any("에셋" in log for log in deps["dynamo"].logs)
-    assert deps["dynamo"].status_sequence[-1] == JobStatus.SUCCESS
-
-
-# ------------------------------------------------------- 중복 처리 방지
-
-
-@pytest.mark.parametrize("terminal", [JobStatus.SUCCESS, JobStatus.CANCELED])
-def test_process_job_skips_terminal_status(
-    config: Config, message: SQSMessage, terminal: JobStatus
-) -> None:
-    """SUCCESS/CANCELED Job은 처리하지 않고 메시지를 삭제한다 (BR-001)."""
-    dynamo = FakeDynamoClient(initial_status=terminal)
-    orchestrator, deps = build_orchestrator(config, dynamo=dynamo)
-
-    orchestrator.process_job(message)
-
-    assert dynamo.updates == []
-    assert deps["sqs"].deleted == ["rh-1"]
-    assert deps["ai"].calls == []
-
-
-def test_process_job_proceeds_when_status_lookup_fails(
-    config: Config, message: SQSMessage
-) -> None:
-    """상태 조회 실패 시에도 처리를 시도한다 (Job 유실 방지)."""
-    dynamo = FakeDynamoClient()
-    dynamo.get_error = RuntimeError("DynamoDB 장애")
-    orchestrator, deps = build_orchestrator(config, dynamo=dynamo)
-
-    orchestrator.process_job(message)
-
-    assert dynamo.status_sequence[-1] == JobStatus.SUCCESS
-    assert deps["sqs"].deleted == ["rh-1"]
-
-
-def test_process_job_proceeds_when_record_missing(
-    config: Config, message: SQSMessage
-) -> None:
-    """레코드가 없어도(None) 처리를 진행한다."""
-    dynamo = FakeDynamoClient(initial_status=None)
-    orchestrator, deps = build_orchestrator(config, dynamo=dynamo)
-
-    orchestrator.process_job(message)
-
-    assert dynamo.status_sequence[-1] == JobStatus.SUCCESS
-
-
-# ------------------------------------------------------------- 실패 처리
 
 
 @pytest.mark.parametrize(
-    ("failure", "expected_code"),
-    [
-        (AIGenerationError(detail="cli 실패"), ErrorCode.AI_GENERATION_FAILED),
-        (RuntimeError("알 수 없는 오류"), ErrorCode.INTERNAL_ERROR),
-    ],
+    "failed_status",
+    [JobStatus.ANALYZING, JobStatus.GENERATING_CODE, JobStatus.BUILDING],
 )
-def test_process_job_ai_failure(
+def test_intermediate_status_failure_continues_to_success(
     config: Config,
     message: SQSMessage,
+    failed_status: JobStatus,
+) -> None:
+    status = FakeStatusApiClient()
+    status.fail_next(failed_status, status_failure())
+    orchestrator, deps = build_orchestrator(config, status=status)
+
+    orchestrator.process_job(message)
+
+    assert status.status_sequence[-1] is JobStatus.SUCCESS
+    assert deps["ai"].calls
+    assert deps["builder"].calls
+    assert deps["sqs"].deleted == ["rh-1"]
+
+
+def test_every_redelivery_runs_complete_pipeline(
+    config: Config,
+    message: SQSMessage,
+) -> None:
+    orchestrator, deps = build_orchestrator(config)
+
+    orchestrator.process_job(message)
+    orchestrator.process_job(message)
+
+    status: FakeStatusApiClient = deps["status"]
+    expected = [
+        JobStatus.ANALYZING,
+        JobStatus.GENERATING_CODE,
+        JobStatus.BUILDING,
+        JobStatus.SUCCESS,
+    ]
+    assert status.status_sequence == expected * 2
+    assert len(deps["ai"].calls) == 2
+    assert len(deps["builder"].calls) == 2
+    assert deps["sqs"].deleted == ["rh-1", "rh-1"]
+    assert not hasattr(status, "get_job_status")
+
+
+@pytest.mark.parametrize(
+    ("component", "failure", "expected_code"),
+    [
+        ("requirements", RequirementsReadError(detail="read"), ErrorCode.REQUIREMENTS_READ_FAILED),
+        ("ai", AIGenerationError(detail="ai"), ErrorCode.AI_GENERATION_FAILED),
+        ("build", BuildError(detail="build"), ErrorCode.BUILD_FAILED),
+        ("artifact", ArtifactUploadError(detail="artifact"), ErrorCode.ARTIFACT_UPLOAD_FAILED),
+    ],
+)
+def test_processing_failure_reports_safe_failed_and_keeps_message(
+    config: Config,
+    message: SQSMessage,
+    component: str,
     failure: Exception,
     expected_code: ErrorCode,
 ) -> None:
-    """코드 생성 실패 시 FAILED 기록 후 메시지를 유지한다 (BR-003, BR-008)."""
-    orchestrator, deps = build_orchestrator(config, ai=FakeAIGenerator(error=failure))
+    s3 = FakeS3Client()
+    ai = FakeAIGenerator()
+    builder = FakeApkBuilder()
+    if component == "requirements":
+        s3.download_error = failure
+    elif component == "ai":
+        ai.error = failure
+    elif component == "build":
+        builder.error = failure
+    else:
+        s3.artifact_error = failure
 
+    orchestrator, deps = build_orchestrator(config, s3=s3, ai=ai, builder=builder)
     orchestrator.process_job(message)
 
-    dynamo: FakeDynamoClient = deps["dynamo"]
-    last = dynamo.updates[-1]
-    assert last["status"] == JobStatus.FAILED
-    assert last["error_code"] == expected_code
+    status: FakeStatusApiClient = deps["status"]
+    failed = status.updates[-1]
+    assert failed["status"] is JobStatus.FAILED
+    assert failed["error_code"] is expected_code
+    assert failed["progress"] is None
+    assert failed["artifact_key"] is None
+    assert str(failure) not in str(failed["message"])
     assert deps["sqs"].deleted == []
 
 
-def test_process_job_build_failure(config: Config, message: SQSMessage) -> None:
-    """빌드 실패 시 BUILD_FAILED가 기록된다 (BR-008)."""
+def test_failed_reporting_failure_preserves_original_error(
+    config: Config,
+    message: SQSMessage,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    status = FakeStatusApiClient()
+    status.fail_next(JobStatus.FAILED, status_failure(StatusApiFailureKind.TIMEOUT))
     orchestrator, deps = build_orchestrator(
-        config, builder=FakeApkBuilder(error=BuildError(detail="gradle 실패"))
+        config,
+        status=status,
+        builder=FakeApkBuilder(error=BuildError(detail="sentinel-build-detail")),
     )
 
+    with caplog.at_level(logging.DEBUG):
+        orchestrator.process_job(message)
+
+    failed = status.updates[-1]
+    assert failed["error_code"] is ErrorCode.BUILD_FAILED
+    assert deps["sqs"].deleted == []
+    assert "original_error_code=BUILD_FAILED" in caplog.text
+    assert "sentinel-build-detail" not in caplog.text
+
+
+def test_success_failure_reports_internal_error_and_does_not_delete(
+    config: Config,
+    message: SQSMessage,
+) -> None:
+    status = FakeStatusApiClient()
+    status.fail_next(JobStatus.SUCCESS, status_failure())
+    orchestrator, deps = build_orchestrator(config, status=status)
+
     orchestrator.process_job(message)
 
-    last = deps["dynamo"].updates[-1]
-    assert last["status"] == JobStatus.FAILED
-    assert last["error_code"] == ErrorCode.BUILD_FAILED
-    assert deps["sqs"].deleted == []
+    assert status.status_sequence[-2:] == [JobStatus.SUCCESS, JobStatus.FAILED]
+    assert status.updates[-1]["error_code"] is ErrorCode.INTERNAL_ERROR
+    assert status.updates[-1]["progress"] is None
+    assert deps["sqs"].delete_attempts == 0
 
 
-def test_process_job_artifact_upload_failure(config: Config, message: SQSMessage) -> None:
-    """APK 업로드 실패 시 SUCCESS로 전이하지 않는다 (BR-006, BR-008)."""
+def test_delete_failure_after_success_does_not_report_failed(
+    config: Config,
+    message: SQSMessage,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[str] = []
+    sqs = FakeSQSClient(events=events)
+    sqs.delete_error = RuntimeError("sentinel-delete-detail")
+    orchestrator, deps = build_orchestrator(config, events=events, sqs=sqs)
+
+    with caplog.at_level(logging.DEBUG):
+        orchestrator.process_job(message)
+
+    status: FakeStatusApiClient = deps["status"]
+    assert status.status_sequence[-1] is JobStatus.SUCCESS
+    assert JobStatus.FAILED not in status.status_sequence
+    assert sqs.delete_attempts == 1
+    assert sqs.deleted == []
+    assert "sqs_delete_failed_after_success" in caplog.text
+    assert "sentinel-delete-detail" not in caplog.text
+
+
+def test_artifact_failure_prevents_success_and_delete(
+    config: Config,
+    message: SQSMessage,
+) -> None:
     s3 = FakeS3Client()
-    s3.artifact_error = ArtifactUploadError(detail="업로드 실패")
+    s3.artifact_error = ArtifactUploadError(detail="upload")
     orchestrator, deps = build_orchestrator(config, s3=s3)
 
     orchestrator.process_job(message)
 
-    dynamo: FakeDynamoClient = deps["dynamo"]
-    assert JobStatus.SUCCESS not in dynamo.status_sequence
-    assert dynamo.updates[-1]["status"] == JobStatus.FAILED
-    assert dynamo.updates[-1]["error_code"] == ErrorCode.ARTIFACT_UPLOAD_FAILED
-    assert deps["sqs"].deleted == []
+    sequence = deps["status"].status_sequence
+    assert JobStatus.SUCCESS not in sequence
+    assert sequence[-1] is JobStatus.FAILED
+    assert deps["sqs"].delete_attempts == 0
 
 
-def test_failure_does_not_overwrite_progress(config: Config, message: SQSMessage) -> None:
-    """실패 시 progress를 전달하지 않아 마지막 값이 유지된다 (BR-007)."""
-    orchestrator, deps = build_orchestrator(
-        config, builder=FakeApkBuilder(error=BuildError(detail="실패"))
-    )
-
-    orchestrator.process_job(message)
-
-    failed = deps["dynamo"].updates[-1]
-    assert failed["progress"] is None
-
-
-def test_failure_message_has_no_internal_detail(
-    config: Config, message: SQSMessage
+def test_raw_fallback_reaches_success(
+    config: Config,
+    message: SQSMessage,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """실패 message에 내부 상세 정보가 노출되지 않는다 (BR-009)."""
     orchestrator, deps = build_orchestrator(
         config,
-        builder=FakeApkBuilder(error=BuildError(detail="/data/jobs/x/project 경로 오류")),
+        refiner=FakePromptRefiner(succeeds=False),
     )
 
-    orchestrator.process_job(message)
+    with caplog.at_level(logging.INFO):
+        orchestrator.process_job(message)
 
-    failed = deps["dynamo"].updates[-1]
-    assert failed["message"] == "APK 빌드에 실패했습니다."
-    assert "/data/jobs" not in str(failed["message"])
-
-
-def test_failure_logs_error_code(config: Config, message: SQSMessage) -> None:
-    """실패 로그에 errorCode가 기록된다 (BR-012)."""
-    orchestrator, deps = build_orchestrator(
-        config, builder=FakeApkBuilder(error=BuildError(detail="실패"))
-    )
-
-    orchestrator.process_job(message)
-
-    assert "[worker] 실패: BUILD_FAILED" in deps["dynamo"].logs
+    assert deps["status"].status_sequence[-1] is JobStatus.SUCCESS
+    assert deps["ai"].calls[0][4] is None
+    assert "hermes_fallback" in caplog.text
 
 
-def test_process_job_never_raises(config: Config, message: SQSMessage) -> None:
-    """상태 기록까지 실패해도 예외가 전파되지 않는다 (메인 루프 보호)."""
+def test_asset_count_is_logged_safely(
+    config: Config,
+    message: SQSMessage,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    s3 = FakeS3Client()
+    s3.assets = [tmp_path / "logo.png", tmp_path / "hero.jpg"]
+    orchestrator, _ = build_orchestrator(config, s3=s3)
 
-    class BrokenDynamo(FakeDynamoClient):
-        def update_status(self, *args: Any, **kwargs: Any) -> None:
-            raise RuntimeError("DynamoDB 완전 장애")
+    with caplog.at_level(logging.INFO):
+        orchestrator.process_job(message)
 
-    orchestrator, _ = build_orchestrator(config, dynamo=BrokenDynamo())
-
-    orchestrator.process_job(message)
-
-
-# --------------------------------------------------- 작업 디렉토리 / 멱등성
+    assert f"assets_downloaded job_id={message.job_id} count=2" in caplog.text
 
 
 def test_process_job_recreates_workdir(config: Config, message: SQSMessage) -> None:
-    """기존 작업 디렉토리를 삭제하고 재생성한다 (BR-017)."""
     base = Path(config.work_dir) / message.job_id
     base.mkdir(parents=True)
     stale = base / "stale.txt"
@@ -495,102 +505,127 @@ def test_process_job_recreates_workdir(config: Config, message: SQSMessage) -> N
 
 
 def test_process_job_passes_expected_paths(config: Config, message: SQSMessage) -> None:
-    """AI/빌드 모듈에 규약된 경로가 전달된다."""
     orchestrator, deps = build_orchestrator(config)
 
     orchestrator.process_job(message)
 
     base = Path(config.work_dir) / message.job_id
-    ai: FakeAIGenerator = deps["ai"]
-    refiner: FakePromptRefiner = deps["refiner"]
-    builder: FakeApkBuilder = deps["builder"]
-
-    assert refiner.calls[0] == (
+    assert deps["refiner"].calls[0] == (
         base / "requirements.json",
         base / "refined-prompt.md",
         message.job_id,
     )
-    assert ai.calls[0] == (
+    assert deps["ai"].calls[0] == (
         base / "requirements.json",
         base / "assets",
         base / "project",
         message.job_id,
         base / "refined-prompt.md",
     )
-    assert builder.calls[0] == (base / "project", base / "output" / "app-debug.apk")
+    assert deps["builder"].calls[0] == (
+        base / "project",
+        base / "output" / "app-debug.apk",
+    )
 
 
-# ---------------------------------------------------------- Visibility 연장
-
-
-def test_process_job_uses_queue_visibility_timeout(
-    config: Config, message: SQSMessage
+@pytest.mark.parametrize("fail_build", [False, True])
+def test_visibility_extender_is_paired_on_every_path(
+    config: Config,
+    message: SQSMessage,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_build: bool,
 ) -> None:
-    """run()에서 조회한 Queue Visibility Timeout이 연장에 사용된다 (BR-010)."""
+    RecordingVisibilityExtender.instances.clear()
+    monkeypatch.setattr(
+        "worker.orchestrator.VisibilityExtender",
+        RecordingVisibilityExtender,
+    )
+    builder = FakeApkBuilder(
+        error=BuildError(detail="build") if fail_build else None
+    )
+    orchestrator, _ = build_orchestrator(config, builder=builder)
+
+    orchestrator.process_job(message)
+
+    extender = RecordingVisibilityExtender.instances[-1]
+    assert extender.started == 1
+    assert extender.stopped == 1
+
+
+def test_process_job_contains_unexpected_failed_reporting_error(
+    config: Config,
+    message: SQSMessage,
+) -> None:
+    status = FakeStatusApiClient()
+    status.fail_next(JobStatus.FAILED, RuntimeError("unexpected reporter failure"))
+    orchestrator, deps = build_orchestrator(
+        config,
+        status=status,
+        builder=FakeApkBuilder(error=BuildError(detail="build")),
+    )
+
+    orchestrator.process_job(message)
+
+    assert deps["sqs"].deleted == []
+
+
+def test_process_job_uses_configured_visibility_timeout(
+    config: Config,
+    message: SQSMessage,
+) -> None:
     sqs = FakeSQSClient()
     sqs.visibility_timeout = 600
     orchestrator, _ = build_orchestrator(config, sqs=sqs)
 
-    # run() 없이 process_job만 호출하면 config 기본값을 사용한다
     assert orchestrator._visibility_timeout == config.visibility_timeout
-
     orchestrator._visibility_timeout = sqs.get_visibility_timeout(
         config.visibility_timeout
     )
     assert orchestrator._visibility_timeout == 600
 
 
-# ------------------------------------------------------ 메인 루프 / Shutdown
-
-
-def test_run_stops_after_shutdown_request(config: Config, message: SQSMessage) -> None:
-    """shutdown 요청 후에는 다음 Job을 받지 않는다 (NFR Pattern 7)."""
+def test_run_stops_after_current_job(config: Config, message: SQSMessage) -> None:
     sqs = FakeSQSClient(messages=[message, message])
     orchestrator, deps = build_orchestrator(config, sqs=sqs)
-
     original = orchestrator.process_job
 
-    def process_and_shutdown(msg: SQSMessage) -> None:
-        original(msg)
+    def process_and_shutdown(message: SQSMessage) -> None:
+        original(message)
         orchestrator._handle_shutdown(15, None)
 
     orchestrator.process_job = process_and_shutdown  # type: ignore[method-assign]
-
     orchestrator.run()
 
-    # 첫 Job만 처리되고 두 번째는 큐에 남는다
     assert len(sqs.messages) == 1
-    assert deps["dynamo"].status_sequence[-1] == JobStatus.SUCCESS
+    assert deps["status"].status_sequence[-1] is JobStatus.SUCCESS
     assert orchestrator.shutdown_requested is True
 
 
 def test_run_continues_after_receive_error(config: Config) -> None:
-    """메시지 수신 실패 시 루프가 중단되지 않는다."""
     sqs = FakeSQSClient(messages=[None])
-    sqs.receive_error = RuntimeError("수신 실패")
+    sqs.receive_error = RuntimeError("receive")
     orchestrator, _ = build_orchestrator(config, sqs=sqs)
-
-    call_count = {"n": 0}
+    calls = 0
     original_receive = sqs.receive_message
 
-    def counting_receive() -> SQSMessage | None:
-        call_count["n"] += 1
-        if call_count["n"] >= 3:
+    def receive_then_stop() -> SQSMessage | None:
+        nonlocal calls
+        calls += 1
+        if calls >= 3:
             orchestrator._handle_shutdown(15, None)
             return None
         return original_receive()
 
-    sqs.receive_message = counting_receive  # type: ignore[method-assign]
-
+    sqs.receive_message = receive_then_stop  # type: ignore[method-assign]
     orchestrator.run()
 
-    assert call_count["n"] >= 3
+    assert calls >= 3
 
 
 def test_run_performs_cleanup_before_receive(
-    config: Config, monkeypatch: pytest.MonkeyPatch
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """루프에서 메시지 수신 전에 디렉토리 정리를 수행한다 (BR-018)."""
     calls: list[str] = []
 
     def fake_cleanup(work_dir: str, max_age_hours: int) -> int:
@@ -598,7 +633,6 @@ def test_run_performs_cleanup_before_receive(
         return 0
 
     monkeypatch.setattr("worker.orchestrator.cleanup_old_workdirs", fake_cleanup)
-
     sqs = FakeSQSClient()
     orchestrator, _ = build_orchestrator(config, sqs=sqs)
 
@@ -608,7 +642,6 @@ def test_run_performs_cleanup_before_receive(
         return None
 
     sqs.receive_message = receive_then_shutdown  # type: ignore[method-assign]
-
     orchestrator.run()
 
     assert calls == [f"cleanup:{config.work_dir}:{config.cleanup_hours}", "receive"]

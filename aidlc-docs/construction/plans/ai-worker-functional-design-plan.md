@@ -1,67 +1,139 @@
-# Functional Design Plan - AI Worker
+# Functional Design Plan - ai-worker Status API Migration
 
-## Design Plan
+## Plan Status
 
-- [x] 비즈니스 로직 모델 정의 (처리 시퀀스, 상태 머신)
-- [x] 비즈니스 규칙 및 유효성 검증 정의
-- [x] 도메인 엔티티 정의
+- **Stage**: CONSTRUCTION - Functional Design
+- **Unit**: `ai-worker`
+- **Status**: IN PROGRESS
+- **Detail level**: Comprehensive and targeted to status lifecycle invariants
+- **Unit source**: Approved execution plan and Application Design; Units Generation was explicitly skipped because this is one deployable/runtime unit.
+- **Scope**: Detailed business logic, domain entities/value objects, validation rules, data flow, integration outcomes, and failure scenarios
+- **Out of scope**: Concrete HTTP library code and infrastructure patterns (NFR Design), source changes (Code Generation), Backend/Mobile implementation
 
----
+## Step 1 - Unit Context Analysis
 
-## Design Questions
+- [x] Load the Functional Design rule and existing `ai-worker` artifacts.
+- [x] Load approved Status API requirements and Application Design contracts.
+- [x] Inspect existing SQS, workspace, S3, Hermes, Kiro, Gradle, visibility, status, and error models.
+- [x] Identify superseded functional paths: status GET, terminal skip/delete, DynamoDB writes/logs, strict persisted-state progression, and table record model.
+- [x] Confirm preserved behavior: one-Job processing, clean workspace, raw JSON ingress, optional assets, Hermes fallback, Kiro/Gradle execution, verified artifact, visibility extension, and 24-hour cleanup.
 
-### Business Logic
+## Step 2 - Resolved Functional Questions
 
-## Question 1
-kiro-cli 호출 시 프롬프트 구성 방식은 어떻게 할 예정입니까?
+All answers are inherited from approved requirements and Application Design. No unresolved `[Answer]:` tag remains.
 
-A) requirements.json 내용을 그대로 kiro-cli에 전달 (파이프라인)
+### Question 1 - Repeated SQS delivery
 
-B) requirements.json을 분석하여 구조화된 프롬프트 템플릿에 삽입 후 전달
+How does the Worker handle a redelivered valid Job message?
 
-C) requirements.json + 에셋 정보를 결합한 마크다운 형식으로 변환 후 전달
+A) Read terminal state and skip completed Jobs
 
-D) kiro-cli가 직접 requirements.json 파일을 읽도록 경로만 전달
+B) Recreate the workspace and execute the entire Job from ANALYZING
 
-X) Other (please describe after [Answer]: tag below)
+C) Resume from the most recently observed local phase
 
-[Answer]: D
+X) Other
 
-## Question 2
-Visibility Timeout 연장 주기는 어떻게 설정하시겠습니까?
+[Answer]: B - FR-SA-013 and FR-SA-014 explicitly prohibit GET and require full reprocessing.
 
-A) Queue의 Visibility Timeout 값의 50% 주기 (예: 30초 Timeout → 15초마다 연장)
+### Question 2 - Status update criticality
 
-B) 고정 주기 (예: 60초마다 연장)
+Which layer decides whether a final Status API failure stops processing?
 
-C) 각 처리 단계 시작 시 연장 (단계별 1회)
+A) The Status API client swallows every failure
 
-X) Other (please describe after [Answer]: tag below)
+B) The orchestrator applies best-effort to ANALYZING/GENERATING_CODE/BUILDING/FAILED and mandatory semantics to SUCCESS
 
-[Answer]: A
+C) The Backend response body decides
 
-## Question 3
-Job 처리 완료 후 작업 디렉토리(/data/jobs/{jobId}/) 정리 방식은?
+X) Other
 
-A) 즉시 삭제 (Job 완료/실패 후 바로 정리)
+[Answer]: B - FR-SA-012 and the approved component boundary place lifecycle criticality in the orchestrator.
 
-B) 일정 기간 보존 후 삭제 (디버깅용, 예: 24시간)
+### Question 3 - HTTP outcome algorithm
 
-C) 수동 정리 (자동 삭제 하지 않음)
+What result and retry rule governs one status update command?
 
-X) Other (please describe after [Answer]: tag below)
+A) Parse JSON and retry any exception
 
-[Answer]: B = 24시간
+B) Accept any 2xx, retry only 5xx for three total attempts with 1-second/2-second delays, and do not retry 4xx, connection errors, timeouts, or other non-2xx classes
 
-## Question 4
-kiro-cli 실행 시 타임아웃을 설정해야 합니까?
+C) Retry until SQS visibility expires
 
-A) 예 - 고정 타임아웃 (예: 10분)
+X) Other
 
-B) 예 - 단계별 다른 타임아웃 (분석: 5분, 코드 생성: 15분)
+[Answer]: B - FR-SA-009 through FR-SA-011 define the complete decision table; success never depends on a response body.
 
-C) 아니오 - 타임아웃 없이 완료까지 대기
+### Question 4 - Mandatory SUCCESS failure
 
-X) Other (please describe after [Answer]: tag below)
+What happens after verified artifact upload if SUCCESS cannot be recorded?
 
-[Answer]: C
+A) Delete the SQS message because the artifact exists
+
+B) Classify completion as INTERNAL_ERROR, attempt FAILED best-effort, and preserve the SQS message
+
+C) Ignore the error and return success locally
+
+X) Other
+
+[Answer]: B - FR-SA-007, FR-SA-008, and FR-SA-012 require fail-closed completion.
+
+### Question 5 - FAILED reporting failure
+
+How is a second failure while reporting FAILED handled?
+
+A) Replace the original error with the reporting error
+
+B) Log sanitized reporting metadata, preserve the original errorCode/message, and keep the SQS message
+
+C) Delete the message to avoid duplicate work
+
+X) Other
+
+[Answer]: B - The original Job failure remains authoritative and FAILED is best-effort.
+
+### Question 6 - Domain representation of outbound status
+
+How should optional payload fields be modeled before serialization?
+
+A) A status-update value object with optional typed fields; serialization omits `None`
+
+B) Free-form dictionaries assembled in every phase
+
+C) A DynamoDB record object reused for HTTP
+
+X) Other
+
+[Answer]: A - A typed value object preserves exact field names and FAILED progress omission while keeping transport serialization centralized.
+
+### Answer Analysis
+
+- [x] Six of six answers are precise and directly traceable to approved requirements.
+- [x] No vague, combined, conditional, contradictory, or frontend-specific decision exists.
+- [x] No clarification file or additional question round is required.
+
+## Step 3 - Mandatory Functional Design Artifacts
+
+- [x] Update `business-rules.md` with full-reprocessing, payload, criticality, HTTP outcome, deletion, error-preservation, logging, and preserved pipeline rules.
+- [x] Update `domain-entities.md` with Status API command/failure value objects, exact status mappings, target Config, existing Job/S3/workspace entities, and removed persistence model.
+- [x] Update `business-logic-model.md` with deterministic Job orchestration, status-client decision algorithm, success/failure flows, and scenario matrix.
+- [x] Confirm no frontend/UI artifact is applicable to the `ai-worker` unit.
+
+## Step 4 - Functional Validation
+
+- [x] Verify exact ANALYZING, GENERATING_CODE, BUILDING, SUCCESS, and FAILED payloads and omission rules.
+- [x] Verify status invocation points and per-delivery sequence.
+- [x] Verify upload plus HeadObject/size validation precedes SUCCESS and any 2xx precedes SQS deletion.
+- [x] Verify SUCCESS final failure becomes INTERNAL_ERROR and FAILED reporting cannot mask the original error.
+- [x] Verify only 5xx retries, with three total attempts and 1-second/2-second delays; all other final failures have no client retry.
+- [x] Verify no Worker-side GET, DynamoDB access, table/log entity, or terminal skip remains in target behavior.
+- [x] Verify existing input, AI/build, S3/SQS, visibility, workspace, and cleanup behavior remains represented.
+- [x] Verify requirement/story traceability, Mermaid/text alternatives, pseudocode, Markdown, and whitespace.
+- [x] Obtain independent review with no blocking finding.
+
+## Step 5 - Completion and Standard Approval Gate
+
+- [x] Update `aidlc-state.md` to the Functional Design approval gate.
+- [x] Log validation, disabled-extension handling, and the complete standardized approval prompt in `audit.md`.
+- [x] Present only `Request Changes` and `Continue to Next Stage` options.
+- [x] Wait for explicit approval before NFR Requirements.

@@ -1,92 +1,166 @@
-# NFR Requirements Plan - AI Worker
+# NFR Requirements Plan - ai-worker Status API Migration
 
-## Plan
+## Plan Status
 
-- [x] Python 기술 스택 상세 결정
-- [x] 성능/처리량 요구사항 정의
-- [x] 안정성/가용성 요구사항 정의
-- [x] 보안 요구사항 확정
-- [x] 운영/유지보수 요구사항 정의
+- **Stage**: CONSTRUCTION - NFR Requirements
+- **Unit**: `ai-worker`
+- **Status**: COMPLETE AND APPROVED
+- **Depth**: Standard, targeted to the new HTTPS dependency and operational boundary
+- **Inputs**: Approved Status API requirements, Application Design, Functional Design, current dependency manifest/lock, systemd unit, and environment template
+- **Scope**: Performance, reliability, availability, security, observability, operations, scalability, maintainability, quality gates, and technology choices
+- **Out of scope**: Concrete implementation patterns (NFR Design), source changes (Code Generation), infrastructure resource creation, Backend/Mobile implementation
 
----
+## Step 1 - NFR Context Analysis
 
-## NFR Questions
+- [x] Load NFR Requirements rule and existing NFR artifacts.
+- [x] Load approved functional/application design and authoritative requirements.
+- [x] Inspect current Python, dependency, lock, systemd, environment, IAM, logging, workspace, and E2E constraints.
+- [x] Identify stale NFR assumptions: DynamoDB idempotency/permissions/logs, unpinned “latest” dependencies, and direct table configuration.
+- [x] Confirm retained baseline: Python 3.12, uv, single sequential Worker, t3.xlarge planning baseline, systemd, SQS/S3 boto3, 24-hour cleanup, and strict quality gates.
 
-### Tech Stack
+## Step 2 - Resolved NFR Questions
 
-## Question 1
-Python 버전은 무엇을 사용하시겠습니까?
+All answers are inherited from approved decisions or current verified project constraints. No unresolved `[Answer]:` tag remains.
 
-A) Python 3.11
+### Question 1 - Status API latency limits
 
-B) Python 3.12
+What measurable timeout applies to each Status API attempt?
 
-C) Python 3.13
+A) One 30-second total request timeout
 
-X) Other (please describe after [Answer]: tag below)
+B) Connect timeout 3 seconds and read-inactivity timeout 10 seconds, with no separate global request deadline
 
-[Answer]: B
+C) No timeout
 
-## Question 2
-Python 패키지 관리자는 무엇을 사용하시겠습니까?
+X) Other
 
-A) pip + requirements.txt
+[Answer]: B - FR-SA-011 specifies the requests timeout tuple; it is not an end-to-end Job deadline.
 
-B) pip + pyproject.toml
+### Question 2 - Retry availability policy
 
-C) Poetry
+Which failures consume retry/backoff budget?
 
-D) uv
+A) Every exception
 
-X) Other (please describe after [Answer]: tag below)
+B) Only HTTP 5xx, for three total attempts with 1-second and 2-second delays
 
-[Answer]: X = 추천
+C) Network errors and timeouts only
 
-### Performance
+X) Other
 
-## Question 3
-단일 Job의 최대 허용 처리 시간은 얼마입니까? (AI 생성 + 빌드 포함)
+[Answer]: B - FR-SA-009 and FR-SA-010 make 4xx, connection errors, and timeouts immediately final.
 
-A) 10분 이내
+### Question 3 - Completion availability boundary
 
-B) 30분 이내
+How should Status API unavailability affect the Worker?
 
-C) 1시간 이내
+A) Every status outage aborts the Job
 
-D) 제한 없음 (완료까지)
+B) Intermediate/FAILED reporting degrades, but SUCCESS fails closed and preserves SQS
 
-X) Other (please describe after [Answer]: tag below)
+C) All status failures are ignored
 
-[Answer]: D
+X) Other
 
-### Operations
+[Answer]: B - The approved criticality matrix protects expensive processing while preventing unrecorded completion.
 
-## Question 4
-Worker 프로세스 관리 방식은 어떻게 하시겠습니까?
+### Question 4 - Secret and transport controls
 
-A) systemd 서비스로 등록 (자동 재시작)
+How is optional API authentication secured?
 
-B) 수동 실행 (python main.py)
+A) Store the key in source and disable TLS checks in dev
 
-C) supervisor 등 프로세스 매니저 사용
+B) Inject the optional key through the protected environment file, send only as `x-api-key`, keep TLS verification enabled, and redact it everywhere
 
-D) Docker 컨테이너로 실행
+C) Log the key hash for debugging
 
-X) Other (please describe after [Answer]: tag below)
+X) Other
 
-[Answer]: A
+[Answer]: B - NFR-SA-002 and NFR-SA-003 require TLS, TCP 443 egress, repository exclusion, and environment mode 0640 or stricter.
 
-## Question 5
-EC2 인스턴스 사양은 어느 정도를 예상하시겠습니까?
+### Question 5 - Observability destination
 
-A) t3.medium (2 vCPU, 4GB RAM) - 경량 처리
+Where are Worker operational events retained?
 
-B) t3.large (2 vCPU, 8GB RAM) - 빌드 고려
+A) DynamoDB `logs`
 
-C) t3.xlarge (4 vCPU, 16GB RAM) - 여유 확보
+B) Sanitized Python logging to stdout/stderr collected by journald; no user log persistence endpoint
 
-D) 아직 결정되지 않음
+C) Raw HTTP request/response archives
 
-X) Other (please describe after [Answer]: tag below)
+X) Other
 
-[Answer]: C
+[Answer]: B - FR-SA-015 and FR-SA-016 remove DynamoDB logs and prohibit sensitive bodies.
+
+### Question 6 - Technology and dependency policy
+
+What stack/version policy applies?
+
+A) Unpinned latest packages
+
+B) Python 3.12 with uv lock/frozen sync, exact runtime pins including `requests==2.34.2`, and SQS/S3-only Dynamo-related test/stub cleanup
+
+C) Replace Python with another runtime
+
+X) Other
+
+[Answer]: B - Existing manifests and FR-SA-018 require reproducible exact versions.
+
+### Question 7 - Capacity and scaling target
+
+What capacity model applies to this migration?
+
+A) Concurrent multi-Job processing in one process
+
+B) One Job at a time on the existing t3.xlarge planning baseline; no new throughput SLO or autoscaling resource in scope
+
+C) Serverless conversion
+
+X) Other
+
+[Answer]: B - Existing approved operation is sequential, and the migration changes status transport rather than compute capacity.
+
+### Question 8 - Quality and acceptance evidence
+
+What evidence is required before operational acceptance?
+
+A) Manual inspection only
+
+B) Full automated quality gates plus deterministic HTTP/orchestrator tests and an approved dev Job observed through Backend GET and Mobile
+
+C) Production smoke test without local tests
+
+X) Other
+
+[Answer]: B - TR-SA-001 through TR-SA-004 define local, contract, deployment, and joint E2E evidence.
+
+### Answer Analysis
+
+- [x] Eight of eight answers are numeric, bounded, versioned, or linked to explicit acceptance evidence.
+- [x] No vague “standard”, “typical”, “latest”, combined, or contradictory answer remains.
+- [x] Usability/accessibility is N/A for the headless Worker; user-visible status semantics are covered by exact payload and joint Mobile acceptance.
+- [x] No clarification file or additional question round is required.
+
+## Step 3 - Mandatory NFR Artifacts
+
+- [x] Update `nfr-requirements.md` with measurable performance, reliability, security, observability, operations, scalability, maintainability, and E2E criteria.
+- [x] Update `tech-stack-decisions.md` with exact runtime/dev dependency targets, configuration, systemd, HTTP, AWS, and toolchain decisions.
+
+## Step 4 - NFR Validation
+
+- [x] Verify every NFR uses a measurable value, explicit pass/fail condition, or deliberate “not specified/in scope” boundary.
+- [x] Verify connect/read timeout, 5xx attempt/backoff, any-2xx, and no-retry outcomes are exact.
+- [x] Verify TLS, TCP 443, API key, environment mode, IAM removal, workdir mode, and log exclusions.
+- [x] Verify intermediate degradation, mandatory SUCCESS, SQS preservation, redelivery, systemd restart, visibility, and cleanup requirements.
+- [x] Verify exact dependency pins, lock/frozen sync, DynamoDB-extra removal, and retained SQS/S3 boto3 support.
+- [x] Verify pytest, Ruff, strict mypy, compileall, systemd/env, source scan, contract, and E2E evidence gates.
+- [x] Verify all 25 Status API requirement IDs and seven stories map to NFR or explicit functional/deferred ownership.
+- [x] Verify Markdown, embedded TOML/INI/Bash syntax, links, tables, and whitespace.
+- [x] Obtain independent review with no blocking finding.
+
+## Step 5 - Completion and Standard Approval Gate
+
+- [x] Update `aidlc-state.md` to the NFR Requirements approval gate.
+- [x] Log validation, disabled-extension handling, and the complete standardized approval prompt in `audit.md`.
+- [x] Present only `Request Changes` and `Continue to Next Stage` options.
+- [x] Explicit approval received at 2026-08-20T11:57:12.077Z; proceed to NFR Design.

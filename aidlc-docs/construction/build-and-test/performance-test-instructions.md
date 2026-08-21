@@ -1,128 +1,225 @@
-# Performance Test Instructions
+# Performance and Capacity Test Instructions - ai-worker Status API Target
 
-## Applicability
+## 1. Applicability and Non-Goals
 
-Performance validation is applicable because each Job can run for 5 to 30 minutes or longer and combines model generation, disk I/O, Gradle compilation, and AWS calls. No maximum Job duration or throughput target was approved. Therefore this stage does not invent a latency SLA; it defines a reproducible baseline and validates the explicit sequential-processing and visibility-extension requirements.
+Performance/capacity evidence is applicable because a Job combines synchronous Status API calls, Hermes/Kiro model work, disk I/O, Gradle, S3, and SQS visibility management. However, no end-to-end Job deadline, throughput SLO, latency percentile, uptime percentage, RTO/RPO, autoscaling target, or numeric disk/memory alarm threshold was approved.
 
-## Performance Requirements
+This document therefore defines:
 
-| Measure | Requirement or acceptance rule |
+- Deterministic checks for approved performance behavior.
+- An observational target-host baseline for an approved dev Job.
+- Sequential-capacity and visibility observations.
+- Evidence fields for later capacity decisions.
+
+It does not define a pass/fail throughput target or authorize live load/stress testing.
+
+## 2. Approved Performance Requirements
+
+| ID | Requirement |
 |---|---|
-| Concurrent Jobs per Worker | Exactly 1 |
-| SQS receive batch size | Exactly 1 |
-| Long polling wait | 20 seconds |
-| Visibility extension | Approximately every 50% of queue Visibility Timeout |
-| Job duration | Measure and report; no fixed upper bound |
-| Throughput | Measure Jobs per hour; no fixed minimum |
-| Valid-Job error rate | 0% for the agreed representative sample |
-| Process stability | No OOM kill, process crash, or unbounded disk growth |
-| Queue handoff | Next Job begins after the prior Job reaches a terminal state |
+| `NFR-PERF-001` | No application timeout around Hermes, Kiro, or Gradle; record phase timing for measurement. |
+| `NFR-PERF-002` | One Worker process handles exactly one Job at a time. |
+| `NFR-PERF-003` | SQS long polling uses 20 seconds and maximum one message. |
+| `NFR-PERF-004` | Every Status API attempt uses connect/read timeout `(3, 10)`. |
+| `NFR-PERF-005` | Only 5xx retries; three total attempts and delays `[1.0, 2.0]`. |
+| `NFR-PERF-006` | Any 2xx succeeds without response-body parsing; reporting remains synchronous. |
+| `NFR-SCALE-001` | Current design is one Job per process on the existing t3.xlarge planning baseline. |
+| `NFR-SCALE-002` | Approved dev evidence should record instance, memory, disk, and duration observations. |
+| `NFR-SCALE-003` | No autoscaling or multi-instance coordination is implemented by this change. |
 
-## Test Environment
+## 3. Deterministic Local Gate
 
-Use a dedicated queue, bucket prefix, DynamoDB test records, and EC2 instance matching the target t3.xlarge profile. Do not performance-test on shared production resources. Record:
-- EC2 instance type and AMI
-- EBS type, size, IOPS, and throughput
-- Java, Gradle, Android SDK, kiro-cli, and model versions
-- Queue Visibility Timeout
-- Generated application complexity class
-- Warm or cold Gradle cache state
-
-## Baseline Test: One Representative Job
-
-### Setup
-
-1. Prepare one backend-approved deterministic requirements payload.
-2. Clear only the dedicated test Job directory.
-3. Decide whether the Gradle cache is cold or warm and record that choice.
-4. Start resource collection:
+Run the suites that prove performance-control behavior without real waits or external calls:
 
 ```bash
-mkdir -p test-results/performance
-pidstat -durh 5 > test-results/performance/pidstat.log &
-PIDSTAT_PID=$!
-iostat -xz 5 > test-results/performance/iostat.log &
-IOSTAT_PID=$!
+set -euo pipefail
+uv sync --frozen --extra dev
+uv run pytest -q \
+  tests/test_status_api_client.py \
+  tests/test_orchestrator.py \
+  tests/test_sqs_client.py \
+  tests/test_visibility_extender.py
 ```
 
-`pidstat` and `iostat` are provided by the `sysstat` package. Install them in the test AMI before the test window.
+Expected: 60 tests pass.
 
-### Execution
+Evidence must show:
 
-Submit one Job with the procedure in `integration-test-instructions.md`. Record UTC timestamps for:
-- SQS send
-- ANALYZING
-- GENERATING_CODE
-- BUILDING
-- SUCCESS or FAILED
+- Fake sleep recorder observes only 1.0 and 2.0 seconds after retryable 5xx.
+- Every fake PATCH records `(3, 10)`.
+- 4xx/network/timeout outcomes add no retry sleep.
+- Orchestrator completes one Job before the next receive/process cycle.
+- SQS receive uses `WaitTimeSeconds=20`, `MaxNumberOfMessages=1`.
+- Visibility cadence remains 50% of the effective timeout, subject to the retained minimum.
+- A slow processing test double is not canceled by a Worker end-to-end timeout.
 
-After the Job reaches a terminal state:
+## 4. Authorization Gate for Live Measurement
+
+A live baseline mutates AWS/Backend state, consumes model capacity, and builds an Android project. Before execution, record:
+
+- Approved dev environment and account.
+- Unique Job ID and deterministic test fixture.
+- Test window and named owners.
+- Model/provider cost authorization.
+- Queue/bucket/prefix isolation.
+- Warm/cold cache choice.
+- Environment-specific safety stop conditions for memory, disk, cost, time window, and duplicate processing.
+
+Stop conditions must be approved for the test environment; this document does not invent numeric values.
+
+## 5. Target-Host Baseline Metadata
+
+Collect before the Job without printing secrets:
+
+```bash
+set -euo pipefail
+EVIDENCE_DIR="test-results/performance/${JOB_ID}"
+mkdir -p "$EVIDENCE_DIR"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$EVIDENCE_DIR/start-utc.txt"
+uname -a > "$EVIDENCE_DIR/uname.txt"
+lscpu > "$EVIDENCE_DIR/lscpu.txt"
+free -b > "$EVIDENCE_DIR/memory-before.txt"
+df -B1 /data/jobs /data/gradle > "$EVIDENCE_DIR/disk-before.txt"
+java -version > "$EVIDENCE_DIR/java-version.txt" 2>&1
+gradle --version > "$EVIDENCE_DIR/gradle-version.txt" 2>&1
+kiro-cli --version > "$EVIDENCE_DIR/kiro-version.txt" 2>&1
+hermes --version > "$EVIDENCE_DIR/hermes-version.txt" 2>&1
+```
+
+Also record through the approved infrastructure inventory process:
+
+- EC2 instance type/AMI.
+- EBS type/size/configured IOPS/throughput.
+- Queue VisibilityTimeout/RedrivePolicy.
+- Android SDK/build-tools versions.
+- Worker commit SHA.
+- Whether Gradle/Hermes caches are cold or warm.
+
+Review command output before sharing; hostnames/user paths may require sanitization.
+
+## 6. Optional Resource Sampling
+
+If `pidstat` and `iostat` are already installed in the approved image, start sampling before Job submission:
+
+```bash
+pidstat -durh 5 > "$EVIDENCE_DIR/pidstat.log" &
+PIDSTAT_PID=$!
+iostat -xz 5 > "$EVIDENCE_DIR/iostat.log" &
+IOSTAT_PID=$!
+printf '%s\n' "$PIDSTAT_PID" > "$EVIDENCE_DIR/pidstat.pid"
+printf '%s\n' "$IOSTAT_PID" > "$EVIDENCE_DIR/iostat.pid"
+```
+
+Do not install packages during the test window without separate approval. If these tools are unavailable, record equivalent approved CloudWatch/OS observations.
+
+Stop samplers after the scenario:
 
 ```bash
 kill "$PIDSTAT_PID" "$IOSTAT_PID" 2>/dev/null || true
+wait "$PIDSTAT_PID" "$IOSTAT_PID" 2>/dev/null || true
+free -b > "$EVIDENCE_DIR/memory-after.txt"
+df -B1 /data/jobs /data/gradle > "$EVIDENCE_DIR/disk-after.txt"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$EVIDENCE_DIR/end-utc.txt"
 ```
 
-### Pass Criteria
+## 7. Single-Job Observational Baseline
 
-- Only one Job is active.
-- The Worker is not restarted or OOM-killed.
-- Visibility extension continues for the full processing duration.
-- The Job succeeds and produces a non-empty APK.
-- CPU, memory, disk, and network measurements are present for analysis.
+Use the approved success-path procedure in `e2e-test-instructions.md`. Record UTC timestamps for:
 
-## Sequential Queue Test
+- Backend submission/SQS enqueue.
+- Worker Job start.
+- ANALYZING report attempt/acceptance.
+- GENERATING_CODE report attempt/acceptance.
+- BUILDING report attempt/acceptance.
+- Artifact upload and verification.
+- SUCCESS attempt/acceptance.
+- SQS deletion.
+- Worker Job completion.
 
-Submit three representative Jobs to the dedicated queue within one minute. Use one Worker process.
+Record:
 
-Expected behavior:
-- `MaxNumberOfMessages=1` is preserved.
-- No two Job directories show active generation/build work at the same time.
-- Job 2 starts only after Job 1 terminates; Job 3 starts only after Job 2 terminates.
-- All valid Jobs succeed.
-- Report total elapsed time and measured Jobs per hour.
+- Total observed duration and each phase duration.
+- Peak/representative CPU and RSS.
+- Disk use before/after and Gradle cache state.
+- S3 artifact ContentLength.
+- Status API attempts/retries and selected delay.
+- Visibility-extension count/failures.
+- systemd restart/OOM evidence.
 
-Do not treat the three-Job sample as a scalability guarantee. It is a sequential-flow check.
+Interpretation:
 
-## Long-Running Visibility Test
+- A valid approved Job must preserve correctness and ordering.
+- No restart/OOM/duplicate processing should occur in the observed run.
+- Duration and resource values are measurements, not compliance thresholds.
+- A long Job is not a failure solely because it exceeds an unapproved duration.
 
-1. Use a Job expected to exceed one Visibility Timeout.
-2. Record each successful and failed visibility-extension call.
-3. Confirm extension intervals are approximately `VisibilityTimeout * 0.5`, subject to scheduler delay.
-4. Confirm the message receive count does not increase while extension succeeds.
-5. Confirm a transient extension failure does not crash the Job.
+## 8. Sequential Capacity Observation
 
-## Controlled Backlog Stress Test
+Only after a successful single-Job baseline, optionally submit an owner-approved small sequence of representative Jobs to a dedicated queue. The sample size and model budget must be approved before submission.
 
-This test is destructive and must use dedicated resources.
+Observe:
 
-1. Queue 10 valid Jobs.
-2. Keep one Worker active for the first run.
-3. Observe queue depth, age of oldest message, CPU, memory, and disk.
-4. Confirm strict single-Job processing and eventual backlog drain.
-5. If a second Worker is evaluated later, repeat with two workers and verify cross-worker idempotency before changing production capacity.
+- At most one active Job in the process.
+- Next Job starts only after current `process_job` returns.
+- No overlapping Job workspaces show active model/build execution in one process.
+- Queue age/depth trends and total drain time.
+- Per-Job duration/resource differences between cold/warm caches.
+- Every valid Job's correctness result.
 
-Stop the test if any of the following occurs:
-- Free disk falls below the test environment's safety threshold.
-- The process is OOM-killed or repeatedly restarted.
-- Valid-Job error rate becomes non-zero.
-- Visibility extension repeatedly fails and duplicate processing is observed.
+Report measured Jobs/hour only as an observation for that fixture/environment. Do not extrapolate a service SLO or horizontal-scaling guarantee.
 
-## Result Analysis
+## 9. Long-Running Visibility Observation
 
-Record the following in `test-results/performance/results.md`:
+With one approved Job expected to exceed the queue VisibilityTimeout:
 
-| Metric | Baseline | Sequential 3-Job | Backlog 10-Job |
-|---|---:|---:|---:|
-| Total duration | | | |
-| Mean Job duration | | | |
-| p95 Job duration | N/A for one sample | | |
-| Jobs per hour | | | |
-| Peak RSS | | | |
-| Peak CPU | | | |
-| Peak disk use | | | |
-| Visibility extensions | | | |
-| Valid-Job failures | | | |
+1. Record the configured timeout before submission.
+2. Record each visibility-extension success/failure event.
+3. Compare intervals with approximately 50% of the effective timeout, accounting for scheduler/log timestamp granularity.
+4. Confirm receive count does not increase while extension succeeds.
+5. Confirm an isolated extension failure is warning-only and does not cancel processing.
+6. If redelivery occurs, confirm full reprocessing and Backend duplicate acceptance.
 
-## Current Execution Status
+Do not alter a shared queue's VisibilityTimeout merely to force this scenario.
 
-Performance tests were not run in the local Build and Test session. Running them would create real AWS Jobs, consume Hermes and Opus 5 model capacity, and build generated Android projects. Execute them only after the raw Client JSON Backend path, service-user Hermes configuration, and test resource isolation are approved.
+## 10. Status API Capacity Boundary
+
+Do not run standalone PATCH load/stress traffic against the live Backend from this repository:
+
+- Commands mutate Job state.
+- No Backend rate/latency SLO or safe request volume was approved.
+- Repeated commands require Backend idempotency and coordinated test data.
+
+Client-side deterministic tests already prove the per-attempt timeout/retry budget. Any Backend load test requires a separate Backend-owned plan with quotas, fixtures, stop conditions, observability, cleanup, and approval.
+
+## 11. Result Template
+
+Write `test-results/performance/{jobId}/results.md`:
+
+```text
+Commit SHA:
+Environment / instance type:
+Job fixture and Job ID:
+Test window (UTC):
+Owners:
+Cache state:
+Queue VisibilityTimeout / RedrivePolicy:
+Total Job duration:
+Phase durations:
+Status API attempts and retries:
+Visibility extension count/failures:
+Peak/representative CPU:
+Peak RSS / memory before-after:
+Disk before-after:
+Artifact ContentLength / SHA-256:
+Observed Jobs per hour (if sequential sample approved):
+Restarts / OOM / duplicate processing:
+Correctness result:
+Deviations and follow-up:
+```
+
+## 12. Current Status
+
+- Deterministic performance-control tests passed within the 149-test suite.
+- No live performance, sequential-capacity, or long-running Job measurement was executed during instruction generation.
+- No numeric performance threshold is claimed.
+- Target-host observations remain pending an explicitly approved dev Job/window and cost/safety conditions.

@@ -1,172 +1,267 @@
-# Business Rules - AI Worker
+# Business Rules - ai-worker Status API Target
 
-## 1. 메시지 처리 규칙
+## Document Authority
 
-### BR-001: 중복 처리 방지
-- **규칙**: SQS 메시지 수신 후, DynamoDB에서 jobId의 현재 상태를 반드시 확인한다
-- **조건**: status가 `SUCCESS` 또는 `CANCELED`이면 처리를 건너뛴다
-- **동작**: 중복 메시지는 즉시 삭제하고 다음 메시지를 수신한다
-- **근거**: SQS Standard Queue는 at-least-once 전달을 보장하므로 중복이 발생할 수 있다
+These rules define the target Functional Design for the active Status API migration. They supersede DynamoDB status-read/write and persistent-log clauses in the historical Worker baseline. Rules for the existing SQS, S3, Hermes, Kiro, Gradle, visibility, and workspace behavior remain unless explicitly changed below.
 
-### BR-002: 메시지 삭제 시점
-- **규칙**: SQS 메시지는 모든 처리가 정상 완료된 후에만 삭제한다
-- **순서**: APK S3 업로드 성공 → DynamoDB SUCCESS 업데이트 → SQS 메시지 삭제
-- **금지**: 메시지 수신 즉시 삭제 금지
-- **근거**: 실패 시 메시지가 자동으로 재가시화되어 재시도가 가능해야 한다
+## 1. Message Lifecycle Rules
 
-### BR-003: 실패 시 메시지 유지
-- **규칙**: 처리 실패 시 SQS 메시지를 삭제하지 않는다
-- **동작**: Visibility Timeout 만료 후 메시지가 다시 보이게 되어 재처리된다
-- **제한**: 최대 3회 실패 후 DLQ로 이동 (Queue 설정)
+### BR-001: Process Every Valid Delivery from the Beginning
 
----
+- A validated `SQSMessage` always starts a complete processing attempt.
+- The Worker must not query Job status through DynamoDB or Backend GET.
+- The Worker must not skip SUCCESS or CANCELED Jobs and must not delete a message based on a preflight status.
+- Reprocessing deletes and recreates the local Job workspace before downloading inputs.
+- Repeated status commands and overwrites of the same source/artifact S3 keys are allowed.
 
-## 2. 상태 관리 규칙
+### BR-002: SQS Deletion Gate
 
-### BR-004: 상태 전이 순서
-- **규칙**: 상태는 반드시 QUEUED → ANALYZING → GENERATING_CODE → BUILDING → SUCCESS 순서를 따른다
-- **금지**: 상태를 건너뛰거나 역행할 수 없다 (실패 시 FAILED로 전이는 어느 단계에서든 가능)
-- **보장**: 각 상태 전이는 DynamoDB에 원자적으로 기록된다
+The only successful deletion order is:
 
-### BR-005: 상태 업데이트 원자성
-- **규칙**: status, progress, message는 단일 UpdateItem 호출로 동시에 업데이트한다
-- **근거**: 앱이 조회 시 일관된 상태를 볼 수 있어야 한다
+1. APK build succeeds.
+2. Artifact upload succeeds.
+3. HeadObject confirms the object and remote size matches local size.
+4. SUCCESS PATCH is attempted as a mandatory command.
+5. SUCCESS receives any 2xx response.
+6. `DeleteMessage` is called.
 
-### BR-006: artifactKey 기록 시점
-- **규칙**: artifactKey는 S3에 APK 업로드가 완전히 성공한 후에만 DynamoDB에 기록한다
-- **순서**: S3 PutObject 성공 확인 → DynamoDB UpdateItem (status=SUCCESS, artifactKey=...)
-- **근거**: 앱이 artifactKey로 다운로드 시도 시 실제 파일이 존재해야 한다
+No earlier event authorizes message deletion.
 
-### BR-007: progress 값 규칙
-- **규칙**: progress는 다음 고정값만 사용한다
-  - ANALYZING: 25
-  - GENERATING_CODE: 50
-  - BUILDING: 75
-  - SUCCESS: 100
-- **실패 시**: 마지막 progress 값을 유지한다 (덮어쓰지 않음)
+### BR-003: Failure Preserves the Message
 
----
+- Requirements, AI, build, artifact, mandatory SUCCESS, and unexpected processing failures do not delete the message.
+- FAILED reporting success or failure does not change this rule.
+- Visibility expiry and queue redrive policy control subsequent delivery and DLQ behavior.
+- If `DeleteMessage` itself fails after accepted SUCCESS, log an acknowledgment failure and leave the message for redelivery; do not issue a contradictory FAILED command after an accepted SUCCESS.
 
-## 3. 에러 처리 규칙
+## 2. Status Command Rules
 
-### BR-008: 에러 코드 분류
-- **규칙**: 모든 실패에는 적절한 errorCode를 할당한다
-- **분류 기준**:
+### BR-004: Per-Attempt Status Emission Order
 
-| 에러 상황 | errorCode |
-|-----------|-----------|
-| requirements.json 다운로드/파싱 실패 | REQUIREMENTS_READ_FAILED |
-| requirements.json 형식 오류 | INVALID_REQUIREMENTS |
-| Hermes 실행/출력 실패 | 오류 코드 없음; 최대 3회 후 Kiro raw fallback |
-| kiro-cli 실행 실패 (exit code != 0) | AI_GENERATION_FAILED |
-| kiro-cli 파일/경로 오류 | AI_GENERATION_FAILED |
-| Gradle 빌드 실패 | BUILD_FAILED |
-| APK S3 업로드 실패 | ARTIFACT_UPLOAD_FAILED |
-| 위에 해당하지 않는 예외 | INTERNAL_ERROR |
+The Worker attempts statuses in this order within one processing attempt:
 
-### BR-009: 실패 상태 기록
-- **규칙**: 실패 시 DynamoDB에 status=FAILED, message, errorCode를 기록한다
-- **message**: 사용자에게 보여줄 수 있는 한국어 메시지
-- **금지**: 스택 트레이스, 내부 경로 등 민감 정보를 message에 포함하지 않는다
+1. ANALYZING immediately after workspace preparation and visibility start, before requirements download.
+2. GENERATING_CODE after inputs are available, before Hermes and Kiro.
+3. BUILDING after code generation succeeds, before Gradle.
+4. SUCCESS only after verified artifact upload.
 
----
+A failed best-effort status command can be absent from Backend state without changing the local phase order. FAILED may be attempted from any processing failure path before message deletion.
 
-## 4. Visibility Timeout 규칙
+### BR-005: Exact Status Payloads
 
-### BR-010: Visibility Timeout 연장 주기
-- **규칙**: Queue Visibility Timeout의 50% 시점마다 연장을 수행한다
-- **연장 값**: Queue의 원래 Visibility Timeout 값으로 연장 (리셋)
-- **시작**: Job 처리 시작 시 (ANALYZING 전환 직전)
-- **종료**: Job 처리 완료(성공/실패) 시
+| Status | Required JSON fields | Omitted fields |
+|---|---|---|
+| ANALYZING | `status=ANALYZING`, `progress=25`, `message=요구조건을 분석하고 있습니다.` | `artifactKey`, `errorCode` |
+| GENERATING_CODE | `status=GENERATING_CODE`, `progress=50`, `message=Android 코드를 생성하고 있습니다.` | `artifactKey`, `errorCode` |
+| BUILDING | `status=BUILDING`, `progress=75`, `message=APK를 빌드하고 있습니다.` | `artifactKey`, `errorCode` |
+| SUCCESS | `status=SUCCESS`, `progress=100`, `message=앱 생성이 완료되었습니다.`, verified `artifactKey` | `errorCode` |
+| FAILED | `status=FAILED`, safe `message`, approved `errorCode` | `progress`, `artifactKey` |
 
-### BR-011: Visibility 연장 실패 처리
-- **규칙**: Visibility Timeout 연장 호출이 실패해도 현재 Job 처리를 중단하지 않는다
-- **동작**: 연장 실패 로그 기록 후 처리 계속 진행
-- **위험**: 연장 실패 시 중복 처리 가능성 있으나, 멱등성으로 보호됨
+Each command is one JSON object. Optional fields with `None` values are omitted rather than serialized as JSON null.
 
----
+### BR-006: Artifact Key Gate
 
-## 5. 로그 규칙
+- The SUCCESS artifact key is exactly `jobs/{jobId}/artifact/app-debug.apk`.
+- It can enter a SUCCESS command only after upload plus HeadObject/size verification returns normally.
+- Source upload outcome cannot bypass or reorder this gate.
 
-### BR-012: 로그 기록 시점
-- **규칙**: 주요 처리 단계 시작/완료 시 DynamoDB logs 필드에 추가한다
-- **필수 로그 시점**:
-  - 작업 시작
-  - 요구조건 다운로드 완료
-  - 에셋 다운로드 완료 (있을 경우)
-  - Hermes 프롬프트 정제 시작
-  - Hermes 프롬프트 정제 완료 또는 원본 JSON fallback
-  - 코드 생성 시작/완료
-  - APK 빌드 시작/완료
-  - 작업 완료 또는 실패
+### BR-007: Progress Semantics
 
-### BR-013: 로그 보안
-- **규칙**: 다음 정보를 로그에 절대 포함하지 않는다
-  - AWS Access Key / Secret Key
-  - Session Token
-  - Presigned URL
-  - API Key
-  - 사용자 개인정보
-- **검증**: 로그 메시지 생성 시 민감 패턴 필터링
+- ANALYZING uses 25, GENERATING_CODE 50, BUILDING 75, and SUCCESS 100.
+- FAILED does not send progress, so Backend may preserve its previously stored value.
+- The Worker does not calculate intermediate percentages outside this mapping.
 
----
+### BR-008: Error Classification and Safe Messages
 
-## 6. 파일 처리 규칙
+| Error source | `errorCode` | Safe FAILED message |
+|---|---|---|
+| Requirements download/read failure | `REQUIREMENTS_READ_FAILED` | `요구조건 파일을 읽지 못했습니다.` |
+| Requirements or raw JSON validation failure | `INVALID_REQUIREMENTS` | `요구조건 형식이 올바르지 않습니다.` |
+| Kiro generation or generated-project validation failure | `AI_GENERATION_FAILED` | `앱 코드 생성에 실패했습니다.` |
+| Gradle or APK build failure | `BUILD_FAILED` | `APK 빌드에 실패했습니다.` |
+| Required artifact upload or verification failure | `ARTIFACT_UPLOAD_FAILED` | `빌드 결과 업로드에 실패했습니다.` |
+| Mandatory SUCCESS failure or unclassified internal failure | `INTERNAL_ERROR` | `내부 오류가 발생했습니다.` |
 
-### BR-014: 에셋 처리
-- **규칙**: 에셋이 없는 Job도 정상적인 Job이다
-- **동작**: assetsPrefix 아래 객체가 없으면 빈 리스트로 처리하고 계속 진행한다
-- **형식 제한**: image/png, image/jpeg만 지원
-- **개수 제한**: 최대 5개
+Hermes exhaustion alone is not a Job failure and proceeds to raw JSON fallback.
 
-### BR-015: APK 저장 위치
-- **규칙**: 빌드된 APK는 반드시 `jobs/{jobId}/artifact/app-debug.apk`에 저장한다
-- **파일명**: MVP에서는 항상 `app-debug.apk`
-- **근거**: Backend가 이 경로로 Presigned URL을 발급한다
+### BR-009: FAILED Is Best-Effort and Preserves the Original Error
 
-### BR-016: 소스 코드 저장
-- **규칙**: 생성된 코드를 `jobs/{jobId}/source/` 아래에 저장한다
-- **형식**: project.zip (압축)
-- **시점**: APK 빌드 성공 후 (빌드 실패 시에도 저장하여 디버깅에 활용 가능)
+- Capture the original exception, errorCode, and safe message before reporting FAILED.
+- Send only FAILED, safe message, and errorCode.
+- If FAILED reporting fails, log sanitized reporting metadata and preserve the original values.
+- Never raise the reporting failure in place of the original failure.
+- Never include stack trace, internal path, credential, token, API key, raw Client JSON, or Backend response body in the user message.
 
----
+## 3. Status API Transport Decision Rules
 
-## 7. 작업 디렉토리 규칙
+### BR-010: Endpoint and URL Joining
 
-### BR-017: 디렉토리 생성
-- **규칙**: Job 처리 시작 시 `/data/jobs/{jobId}/` 디렉토리를 생성한다
-- **이미 존재 시**: 기존 디렉토리 삭제 후 재생성 (멱등성 보장)
+- Method is PATCH.
+- Base URL comes from required `PROMPTON_API_BASE_URL`.
+- Path is `/v1/jobs/{jobId}/status`.
+- Strip trailing slash characters from the base before appending the fixed path.
+- Job ID is the UUID already validated by `SQSMessage` parsing.
+- No GET operation exists in the Worker client.
 
-### BR-018: 디렉토리 정리
-- **규칙**: 생성 후 24시간이 경과한 작업 디렉토리를 삭제한다
-- **정리 시점**: 메인 루프에서 새 메시지를 수신하기 전
-- **정리 대상**: 성공/실패 모두 포함 (24시간 내 디버깅 가능)
+### BR-011: Header Construction
 
----
+- Always send `Content-Type: application/json`.
+- Add `x-api-key` only when normalized `PROMPTON_STATUS_API_KEY` is non-empty.
+- Header construction is centralized in the Status API client.
+- The key must not appear in logs, exceptions, source, or test evidence.
 
-## 8. 유효성 검증 규칙
+### BR-012: Response Classification
 
-### BR-019: SQS 메시지 유효성
-- **필수 필드**: schemaVersion, jobId, requirements.bucket, requirements.key, assetsPrefix
-- **jobId 형식**: UUID v4
-- **schemaVersion**: "1.0" (현재 지원 버전)
-- **실패 시**: INVALID_REQUIREMENTS 에러
+| Final result | Decision |
+|---|---|
+| Any 2xx | Success; return without parsing response JSON |
+| Any 4xx | Final failure; no retry |
+| Any 5xx | Apply BR-013 bounded retry |
+| Connection error | Final failure; no retry |
+| Connect or read timeout | Final failure; no retry |
+| Other final non-2xx response | Final failure; no retry because only 5xx is retryable |
 
-### BR-020: requirements.json 유효성
-- **입력**: Backend가 S3에 저장한 원본 Client JSON object
-- **최대 크기**: 64 KiB (JSON 파싱 전에 검사)
-- **인코딩**: UTF-8
-- **구조 검증**: 유효한 JSON이며 최상위가 object
-- **허용 범위**: 임의 root/nested 필드 허용; canonical schema는 runtime ingress에 적용하지 않음
-- **실패 시**: INVALID_REQUIREMENTS 또는 REQUIREMENTS_READ_FAILED
-- **보존**: Worker와 Hermes는 원본 JSON 필드를 변경하지 않음
+The response body is not an input to success classification and is never logged in full.
 
-### BR-021: Hermes prompt refinement와 Kiro fallback
-- **순서**: raw JSON 다운로드 및 assets 처리 후 Hermes, 그 다음 Kiro
-- **호출**: `--ignore-rules --toolsets context_engine --oneshot`
-- **Android guardrail**: Kotlin, Jetpack Compose, API level 21-35 또는 26/35 기본값, valid applicationId 보존 또는 Job ID 기반 기본값
-- **출력**: non-empty, NUL 없음, UTF-8 64 KiB 이하 text를 `refined-prompt.md`에 atomic 저장
-- **재시도**: 최초 호출 포함 최대 3회, 실패 후 1초와 2초 대기
-- **로그 보안**: raw JSON과 Hermes stdout/stderr를 로그에 기록하지 않음
-- **fallback**: 모든 시도 실패 시 원본 JSON, assets, 동일 guardrail로 Kiro를 계속 실행
-- **실패 분류**: Hermes exhaustion은 Job 실패가 아니며, 이후 Kiro 실패만 AI_GENERATION_FAILED
+### BR-013: 5xx Retry and Timeout
+
+- Maximum is three total HTTP attempts, including the initial request.
+- After first 5xx, wait 1 second.
+- After second 5xx, wait 2 seconds.
+- After third 5xx, raise final `StatusApiFailure`.
+- A later 2xx completes successfully without another attempt.
+- A 4xx, connection error, or timeout on any attempt stops immediately without sleep.
+- Every request uses connect timeout 3 seconds and read timeout 10 seconds.
+
+### BR-014: Status Criticality
+
+| Status | Final Status API failure handling |
+|---|---|
+| ANALYZING | Warning; continue requirements, AI, and build flow |
+| GENERATING_CODE | Warning; continue Hermes and Kiro flow |
+| BUILDING | Warning; continue Gradle flow |
+| SUCCESS | Propagate as completion failure; do not delete SQS |
+| FAILED | Error log; preserve original failure; do not delete SQS |
+
+Transport logic raises the same typed failure contract; the orchestrator applies this criticality table.
+
+### BR-015: Mandatory SUCCESS Failure
+
+- A final SUCCESS command failure is classified as `INTERNAL_ERROR`.
+- The Worker then attempts one FAILED command through the normal Status API client policy.
+- FAILED reporting remains best-effort and does not authorize deletion.
+- The previously verified S3 artifact is not removed by this flow.
+
+## 4. Visibility and Queue Rules
+
+### BR-016: Visibility Extension Lifecycle
+
+- Start after clean workspace preparation and before ANALYZING reporting.
+- Use the queue Visibility Timeout and the existing 50% extension interval.
+- Stop in `finally` after success, processing failure, status failure, or delete attempt.
+
+### BR-017: Visibility Extension Failure
+
+An extension error is logged locally and does not stop Job processing. The Worker makes no status read to resolve possible duplicate execution.
+
+## 5. Input, AI, Build, and S3 Rules
+
+### BR-018: SQS Message Validation and Reporting Boundary
+
+- Required fields are `schemaVersion`, `jobId`, `requirements.bucket`, `requirements.key`, and `assetsPrefix`.
+- Supported schema version is `1.0`; Job ID must be a UUID.
+- Status API activity begins only after a complete validated `SQSMessage` exists.
+- An invalid envelope without a validated Job ID cannot address the Job status endpoint; retain it for queue redrive and log only sanitized validation metadata.
+
+### BR-019: Raw Requirements Validation
+
+- Download from the message-specified S3 bucket/key.
+- Maximum size is 64 KiB before JSON parsing.
+- Require UTF-8, valid JSON, and a top-level object.
+- Preserve arbitrary root/nested fields; the canonical reference schema is not runtime ingress enforcement.
+- Read failures map to `REQUIREMENTS_READ_FAILED`; content validation failures map to `INVALID_REQUIREMENTS`.
+
+### BR-020: Optional Assets
+
+- No asset is a valid condition.
+- Accept PNG and JPEG only, sorted and limited to five.
+- Individual asset or listing failure is logged and processing continues with available/empty assets.
+
+### BR-021: Hermes Refinement and Kiro Fallback
+
+- Run after raw JSON and assets are available and after GENERATING_CODE reporting.
+- Hermes uses `--ignore-rules --toolsets context_engine --oneshot`.
+- Permit three total Hermes attempts with 1-second/2-second delay.
+- Accept only non-empty, NUL-free, UTF-8 output at most 64 KiB; write atomically to `refined-prompt.md`.
+- On exhaustion, continue Kiro with raw JSON, assets, and the same Android guardrails.
+- Do not log raw JSON or Hermes stdout/stderr.
+- Kiro failure maps to `AI_GENERATION_FAILED`.
+
+### BR-022: Build and Artifact
+
+- Report BUILDING before Gradle.
+- Build through the existing wrapper/assembleDebug flow without a Worker timeout.
+- Copy the selected APK to the Job output path.
+- Upload to the fixed artifact key and verify HeadObject/size before returning the key.
+- Build errors map to `BUILD_FAILED`; artifact errors map to `ARTIFACT_UPLOAD_FAILED`.
+
+### BR-023: Source Upload
+
+- Source archive key is `jobs/{jobId}/source/project.zip`.
+- Source upload occurs after APK build and before required artifact finalization.
+- Source upload is best-effort; its failure is logged and cannot prevent artifact upload or SUCCESS.
+
+## 6. Workspace and Cleanup Rules
+
+### BR-024: Clean Job Workspace
+
+- Job base path is `/data/jobs/{jobId}` under configured `WORK_DIR`.
+- Delete an existing Job directory recursively and recreate it before every processing attempt.
+- Restrict the recreated directory to owner access when supported.
+- Include requirements, optional refined prompt, assets, generated project, output, and APK paths.
+
+### BR-025: Periodic Cleanup
+
+- Before polling for a new message, remove Job directories older than configured retention (default 24 hours).
+- Cleanup failure is warning-only and does not stop polling.
+
+## 7. Logging and Configuration Rules
+
+### BR-026: Journald Event Set
+
+Python logging must emit sanitized events for:
+- Job and phase start/completion.
+- Status command success/failure, status class, and attempt count.
+- Each 5xx retry and delay selection.
+- Hermes fallback, source-upload warning, artifact verification, and visibility warning.
+- Final Job success or original errorCode.
+
+No DynamoDB `logs` append or Backend log endpoint is used.
+
+### BR-027: Sensitive Data Exclusion
+
+Never log API key, authentication headers, raw Client JSON, Hermes stdout/stderr, AWS credentials, session token, signed URL, or full Backend response body. User-facing messages come only from the approved safe-message mapping.
+
+### BR-028: Target Configuration and Dependency Boundary
+
+- Required: `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `PROMPTON_API_BASE_URL`.
+- Optional: `PROMPTON_STATUS_API_KEY` plus existing non-status settings.
+- Remove `DYNAMODB_TABLE_NAME` and all Worker DynamoDB runtime paths.
+- Pin `requests==2.34.2`; retain boto3 for SQS/S3.
+- TLS certificate verification remains enabled.
+
+## 8. Requirement and Story Traceability
+
+| Source | Functional realization |
+|---|---|
+| FR-SA-001, FR-SA-002, FR-SA-003 | BR-005, BR-010, BR-011, BR-028 |
+| FR-SA-004, FR-SA-005, FR-SA-006, FR-SA-007 | BR-002, BR-004, BR-005, BR-006 |
+| FR-SA-008 | BR-008, BR-009, BR-015 |
+| FR-SA-009, FR-SA-010, FR-SA-011, FR-SA-012 | BR-012, BR-013, BR-014 |
+| FR-SA-013, FR-SA-014 | BR-001, BR-024 |
+| FR-SA-015, FR-SA-016 | BR-026, BR-027 |
+| FR-SA-017, FR-SA-018 | BR-028 |
+| NFR-SA-001, NFR-SA-002, NFR-SA-003 | BR-011, BR-027, BR-028; measurable realization continues in NFR stages |
+| TR-SA-001, TR-SA-002, TR-SA-003, TR-SA-004 | Decision tables and injection boundaries define deterministic tests and joint E2E observations |
+| US-SA-01, US-SA-02, US-SA-03 | Configuration, phase commands, verified completion, and deletion gate |
+| US-SA-04, US-SA-05, US-SA-06, US-SA-07 | Failure preservation, HTTP decisions, protected observability, and acceptance evidence |

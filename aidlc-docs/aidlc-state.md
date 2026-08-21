@@ -1,14 +1,18 @@
 # AI-DLC State Tracking
 
 ## Project Information
-- **Project Type**: Greenfield
+- **Project Type**: Brownfield (active Status API migration)
+- **Original Project Type**: Greenfield
 - **Start Date**: 2026-08-20T14:30:00Z
-- **Current Stage**: WORKFLOW COMPLETE - Operations Placeholder
+- **Current Stage**: WORKFLOW COMPLETE - Operations Placeholder Acknowledged
+- **Prior Workflow Status**: COMPLETE at 2026-08-20T07:24:55Z
+- **Active Change Request**: Replace Worker direct DynamoDB access with Backend Status API
+- **Change Progress**: COMPLETE at 2026-08-20T13:09:41.571Z; no executable Operations stage exists
 
 ## Workspace State
-- **Existing Code**: Yes (Code Generation에서 생성)
-- **Reverse Engineering Needed**: No
-- **Workspace Root**: d:\Practice\prompthon\prompton_app_maker_server
+- **Existing Code**: Yes (Python Worker; 132-test detection baseline, current suite 149 tests)
+- **Reverse Engineering Needed**: No (current design and implementation artifacts loaded)
+- **Workspace Root**: /home/ubuntu/prompton_app_maker_server
 
 ## Code Location Rules
 - **Application Code**: Workspace root (NEVER in aidlc-docs/)
@@ -22,7 +26,114 @@
 | Resiliency Baseline | No | Requirements Analysis |
 | Property-Based Testing | No | Requirements Analysis |
 
-## Stage Progress
+## Active Status API Migration Execution Plan
+
+- **Plan**: `aidlc-docs/inception/plans/execution-plan.md`
+- **Risk Level**: High
+- **Deployable Units**: 1 (`ai-worker`)
+- **Stages to Execute After Approval**: Application Design, Functional Design, NFR Requirements, NFR Design, Code Generation, Build and Test
+- **Stages to Skip**: Units Generation (single deployment/runtime unit), Infrastructure Design (no Worker-owned resource or IaC change)
+- **Operational Checks Retained**: DynamoDB IAM removal, TCP 443 egress, TLS, env permissions, systemd validation, endpoint readiness, and joint Backend GET/Mobile E2E
+
+## Active Change Stage Progress
+
+### INCEPTION PHASE
+- [x] Workspace Detection - COMPLETED / existing brownfield context resumed
+- [x] Reverse Engineering - SKIP DECISION COMPLETE / current artifacts sufficient
+- [x] Requirements Analysis - COMPLETED AND APPROVED
+- [x] User Stories - COMPLETED AND APPROVED (7 stories)
+- [x] Workflow Planning - COMPLETED AND APPROVED (2026-08-20T11:22:16.964Z)
+- [x] Application Design - COMPLETED AND APPROVED (2026-08-20T11:35:53.834Z)
+- [x] Units Generation - SKIP DECISION COMPLETE / one `ai-worker` unit
+
+### CONSTRUCTION PHASE - ai-worker
+- [x] Functional Design - COMPLETED AND APPROVED (2026-08-20T11:44:39.281Z)
+- [x] NFR Requirements - COMPLETED AND APPROVED (2026-08-20T11:57:12.077Z)
+- [x] NFR Design - COMPLETED AND APPROVED (2026-08-20T12:11:11.523Z)
+- [x] Infrastructure Design - SKIP DECISION COMPLETE / no Worker-owned IaC
+- [x] Code Generation - COMPLETED AND APPROVED (2026-08-20T12:49:40.634Z)
+- [x] Build and Test - COMPLETED AND APPROVED (2026-08-20T13:08:18.475Z)
+
+### OPERATIONS PHASE
+- [x] Operations - PLACEHOLDER ACKNOWLEDGED / WORKFLOW COMPLETE (2026-08-20T13:09:41.571Z)
+
+## Active Application Design Validation
+- **Mandatory Artifacts**: 5/5 generated
+- **Python Signature Blocks**: 17 parsed
+- **Mermaid Diagrams**: 3/3 structurally validated with text alternatives
+- **Requirement Traceability**: 25/25 Status API IDs covered
+- **Lifecycle Invariants**: Verified artifact before mandatory SUCCESS; any 2xx before SQS deletion
+- **Forbidden Paths**: No target Worker GET, direct DynamoDB call, or disabled TLS configuration
+- **Independent Review**: APPROVED; no blocking findings
+
+## Active Functional Design Validation
+- **Mandatory Artifacts**: 3/3 generated; frontend N/A
+- **Business Rules**: 28 target rules
+- **Python Domain Blocks**: 12 parsed
+- **Mermaid Diagrams**: 3/3 structurally validated with text alternatives
+- **Requirement/Story Traceability**: 25/25 requirement IDs and 7/7 stories
+- **Critical Invariants**: Exact payloads; full reprocessing; 5xx-only retry; verified artifact and SUCCESS before delete; original-error preservation
+- **Delete Failure Rule**: Accepted SUCCESS remains authoritative; DeleteMessage failure logs and redelivers without contradictory FAILED
+- **Forbidden Paths**: No target Worker GET, direct DynamoDB call, or persistent status-log path
+- **Independent Review**: APPROVED; no blocking findings
+
+## Active NFR Requirements Validation
+- **Mandatory Artifacts**: 2/2 generated
+- **NFR Set**: 49/49 unique IDs across 10 categories
+- **Requirement/Story Traceability**: 25/25 requirement IDs and 7/7 stories
+- **Embedded Content**: TOML and systemd INI parsed; Bash syntax passed
+- **Technology Targets**: Python 3.12, requests 2.34.2, boto3 1.35.99, jsonschema 4.25.1, SQS/S3-only moto/stubs
+- **Critical Controls**: Exact timeout/retry, fail-closed SUCCESS, IAM removal, TLS/TCP443, optional key, env/workdir/systemd hardening, log exclusions
+- **Quality/E2E Gates**: pytest, Ruff, strict mypy, compileall, lock/frozen sync, source/deployment scans, joint Backend GET/Mobile evidence
+- **Independent Review**: APPROVED; no blocking findings
+
+## Active NFR Design Validation
+- **Mandatory Artifacts**: 2/2 generated; stage plan created and all five question categories resolved
+- **NFR Traceability**: 49/49 approved NFR IDs
+- **Requirement/Story Traceability**: 25/25 Status API requirement IDs and 7/7 stories
+- **Embedded Content**: 2/2 Mermaid diagrams structurally validated with text alternatives; 5 Python blocks parsed
+- **Critical Patterns**: 5xx-only bounded retry; intermediate degradation; mandatory SUCCESS; verified artifact before SUCCESS; accepted SUCCESS before delete; no contradictory FAILED after delete failure
+- **Security/Operations**: TLS defaults, optional-key confinement, DynamoDB IAM removal, TCP 443 readiness, protected environment, systemd hardening, journald allowlist, frozen dependencies
+- **Validation Result**: Markdown fences, whitespace, resolved answers, exact controls, and stale positive DynamoDB/GET patterns passed
+- **Independent Review**: APPROVED; no blocking or material findings
+
+## Active Code Generation Part 1 Validation
+- **Plan**: `aidlc-docs/construction/plans/ai-worker-code-generation-plan.md`
+- **Execution Sequence**: 8 numbered implementation/validation steps
+- **Traceability**: 25/25 Status API requirement IDs and 7/7 stories represented
+- **File Impact**: Exact create/modify/delete paths; brownfield in-place edits; no duplicate modules
+- **Baseline**: uv lock passed; 132 pytest passed with 98 warnings; Ruff passed; source-only strict mypy passed across 25 files; compileall passed
+- **Known Gate Gap**: Repository-wide `mypy .` exposes 13 pre-existing test errors; Step 5 closes them without weakening strict mode
+- **Safety Boundary**: Part 2 was approved at 2026-08-20T12:49:40.634Z; Build and Test instructions are authorized, but live AWS/API/model actions remain separately gated
+- **External Boundary**: No Worker IAM/IaC file exists; live API/AWS/model/deployment actions require separate authorization
+- **Plan Validation**: Markdown, embedded Python, paths, controls, step order, and approval boundary passed
+- **Independent Review**: APPROVED; no blocking or material changes required
+
+## Active Code Generation Part 2 Validation
+- **Execution Plan**: All eight approved generation steps and all seven Worker story checkboxes complete
+- **Implementation**: Status API PATCH client, lifecycle migration, DynamoDB adapter removal, configuration/dependency/deployment updates complete
+- **Local Gates**: 149 tests passed with 70 warnings; Ruff, repository-wide strict mypy over 39 files, compileall, lock check, frozen sync, source/security/deployment scans passed
+- **Traceability**: 25/25 Status API requirements, 49/49 NFRs, and 7/7 stories mapped in `code-summary.md`
+- **Independent Review**: No blocking or material findings; one stale active tracking item corrected
+- **External Boundary**: IAM, TCP 443, deployed env mode, queue/DLQ, and Backend GET/Mobile E2E remain Build and Test evidence
+- **Approval**: Code Generation approved at 2026-08-20T12:49:40.634Z
+
+## Active Build and Test Validation
+- **Artifacts**: Eight instruction/summary files regenerated for the Status API target
+- **Local Gates**: 149 tests passed with 70 warnings; Ruff, strict mypy over 39 files, compileall, lock check, and frozen sync passed
+- **Content Validation**: 52 Bash blocks, nine Python heredocs, six JSON blocks, paths, links, secrets, stale guidance, 25 requirements, 49 NFRs, and seven stories passed
+- **Independent Review**: No blocking or material findings; one cosmetic active state count corrected
+- **External Boundary**: Live IAM, TCP443, deployed env/systemd, queue/DLQ, model, Backend GET, Mobile, and E2E evidence remain explicitly gated
+- **Extensions**: Security Baseline, Resiliency Baseline, and Property-Based Testing disabled; N/A while project-specific controls remain enforced
+
+## Active Change Current Status
+- **Lifecycle Phase**: COMPLETE
+- **Current Stage**: Operations placeholder acknowledged
+- **Previous Step**: Build and Test approved at 2026-08-20T13:08:18.475Z
+- **Current Step**: None; the current AI-DLC workflow ends after Build and Test
+- **Status**: Active Status API migration workflow complete at 2026-08-20T13:09:41.571Z; deployment and live operations remain unauthorized
+
+## Prior Baseline Stage Progress
 - [x] Workspace Detection - COMPLETED (2026-08-20T14:30:00Z)
 - [x] Requirements Analysis - COMPLETED (2026-08-20T14:32:00Z)
 - [x] Workflow Planning - COMPLETED (2026-08-20T14:34:00Z)
@@ -44,7 +155,7 @@
 - **린트 (ruff)**: All checks passed
 - **타입 체크 (mypy strict)**: Success, 23 files
 - **코드 요약**: aidlc-docs/construction/ai-worker/code/code-summary.md
-- **계획 파일**: aidlc-docs/construction/plans/ai-worker-code-generation-plan.md (14/14 steps [x])
+- **계획 파일**: Historical 14-step baseline plan superseded; `aidlc-docs/construction/plans/ai-worker-code-generation-plan.md` now contains the active Status API migration plan
 
 ## Build and Test Results
 - **완료 시각**: 2026-08-20T07:21:10Z

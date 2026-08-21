@@ -22,8 +22,9 @@ def config(tmp_path: Path) -> Config:
     return Config(
         aws_region="us-east-1",
         sqs_queue_url="https://sqs.us-east-1.amazonaws.com/123456789012/test-queue",
-        dynamodb_table_name="test-jobs",
         s3_bucket_name="test-bucket",
+        prompton_api_base_url="https://api.example.com",
+        prompton_status_api_key=None,
         work_dir=str(tmp_path / "jobs"),
         visibility_timeout=300,
         cleanup_hours=24,

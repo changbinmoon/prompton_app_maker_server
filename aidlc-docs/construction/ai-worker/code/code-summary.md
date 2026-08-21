@@ -1,189 +1,224 @@
-# Code Summary - AI Worker
+# Code Summary - ai-worker Status API Migration
 
-## 개요
+## 1. Summary
 
-| 항목 | 값 |
-|------|-----|
-| Unit | ai-worker (단일 유닛) |
-| 언어 | Python 3.12 |
-| 패키지 관리 | uv (비패키지 애플리케이션 모드) |
-| 애플리케이션 코드 위치 | Workspace root |
-| Follow-up 추가 | `ai/refiner.py`, `tests/test_prompt_refiner.py`; raw/Hermes 통합을 위한 기존 코드·배포·문서 수정 |
+The `ai-worker` now reports Job lifecycle changes through the outbound Backend Status API instead of reading or writing Worker-owned DynamoDB state. It remains a single sequential Python 3.12 process and preserves existing SQS, S3, Hermes, Kiro, Gradle, visibility-extension, workspace, and cleanup behavior.
 
----
+This document supersedes the historical DynamoDB implementation clauses previously recorded here. Build and Test instruction files are intentionally not rewritten during Code Generation; the mandatory Build and Test stage will regenerate them after explicit Code Generation approval.
 
-## 1. 생성된 파일 목록
+| Item | Result |
+|---|---|
+| Unit | `ai-worker` |
+| Project type | Brownfield Python Worker |
+| Application code | `/home/ubuntu/prompton_app_maker_server` |
+| Documentation | `aidlc-docs/construction/ai-worker/code/` |
+| Status transport | `PATCH /v1/jobs/{jobId}/status` |
+| Worker status reads | None; no Backend GET or DynamoDB GetItem path |
+| Full local suite | 149 passed, 70 botocore deprecation warnings |
+| Static gates | Ruff, repository-wide strict mypy (39 files), compileall passed |
+| Dependency gates | Lock check and frozen dev sync passed |
+| Live external actions | Not executed; deferred to Build and Test and an approved test window |
 
-### 1.1 엔트리포인트 및 설정
+## 2. File Delta
 
-| 파일 | 역할 |
-|------|------|
-| `main.py` | 프로세스 엔트리포인트, 로깅 초기화, Config 로드, Orchestrator 실행 |
-| `pyproject.toml` | 의존성, ruff/mypy/pytest 설정 |
-| `.python-version` | Python 3.12 고정 |
+### 2.1 Created
 
-### 1.2 도메인 모델 (`models/`)
+| Path | Purpose |
+|---|---|
+| `status_api/__init__.py` | Exports the outbound Status API adapter. |
+| `status_api/client.py` | Implements PATCH URL/header/payload construction, timeout, 5xx-only retry, typed sanitized failure, and allowlisted logging. |
+| `tests/test_status_api_client.py` | Provides 19 deterministic fake-session/sleep tests for the HTTP and security contract. |
+| `tests/test_main.py` | Verifies safe startup logging, configuration failure, API-key exclusion, and removal of table output. |
 
-| 파일 | 주요 정의 |
-|------|-----------|
-| `models/enums.py` | `JobStatus`, `ErrorCode`, `JOB_PROGRESS`, `STATUS_MESSAGES`, `TERMINAL_STATUSES`, `ERROR_MESSAGES` |
-| `models/entities.py` | `Config`(+Hermes path), `SQSMessage`(+`from_raw` 검증), `JobWorkDir`(+`requirements.json`, `refined-prompt.md`), `S3Paths`(+`for_job`) |
-| `models/requirements.py` | Runtime ingress와 분리된 optional canonical reference schema validator |
-| `models/exceptions.py` | `WorkerError` 계층 5종, `classify_error()`, `user_message_for()` |
+### 2.2 Modified in Place
 
-### 1.3 설정 (`config/`)
+| Path | Change |
+|---|---|
+| `pyproject.toml` | Added direct `requests==2.34.2`; reduced moto and boto3-stubs extras to SQS/S3. |
+| `uv.lock` | Regenerated the exact dependency graph; removed DynamoDB-only stub resolution. |
+| `models/entities.py` | Replaced the table field with normalized API base URL and an optional `repr=False` API key. |
+| `models/enums.py` | Corrected the GENERATING_CODE message and removed the terminal-status skip constant. |
+| `models/exceptions.py` | Added typed, sanitized Status API failures and removed obsolete persistence wording. |
+| `models/__init__.py` | Exported the Status API failure types. |
+| `config/settings.py` | Requires a nonblank API base URL, strips trailing slashes, normalizes a blank key to `None`, and removes the table variable. |
+| `worker/orchestrator.py` | Replaced persistence/status reads with lifecycle PATCH commands, criticality handling, and the SUCCESS/delete barrier. |
+| `main.py` | Logs only the non-secret API base at startup; no table or key output. |
+| `s3/client.py` | Updated stale persistence wording; data-plane behavior is unchanged. |
+| `sqs/client.py` | Updated stale design references; behavior is unchanged. |
+| `worker/visibility_extender.py` | Updated stale references; cadence/error handling are unchanged. |
+| `utils/cleanup.py` | Replaced terminal-skip wording with full-redelivery semantics; behavior is unchanged. |
+| `tests/conftest.py` | Migrated the shared Config fixture to API base/key fields. |
+| `tests/test_config.py` | Covers URL handling/normalization, optional-key protection, defaults, and table removal. |
+| `tests/test_orchestrator.py` | Replaced DynamoDB tests with 24 lifecycle, ordering, degradation, redelivery, failure, logging, and shutdown tests. |
+| `tests/test_requirements_contract.py` | Added one narrow typing suppression for untyped `jsonschema`; behavior is unchanged. |
+| `tests/test_s3_client.py` | Added strict moto fixture typing and formatting; behavior is unchanged. |
+| `deploy/env.example` | Added required `PROMPTON_API_BASE_URL`, empty optional `PROMPTON_STATUS_API_KEY`, and removed `DYNAMODB_TABLE_NAME`; retained 0640/secret guidance. |
+| `deploy/prompton-worker.service` | Preserved supervision/hardening and added `/data/gradle` to `ReadWritePaths`. |
 
-| 파일 | 역할 |
-|------|------|
-| `config/settings.py` | 환경 변수 로드/검증(`load_config`, `HERMES_CLI_PATH`), boto3 재시도 설정(`build_boto_config`) |
+### 2.3 Deleted
 
-### 1.4 AWS 클라이언트
+| Path | Reason |
+|---|---|
+| `dynamo/client.py` | Direct Worker DynamoDB state/log persistence is prohibited. |
+| `dynamo/__init__.py` | The obsolete adapter package has no remaining responsibility. |
+| `tests/test_dynamo_client.py` | Replaced by outbound Status API contract tests. |
 
-| 파일 | 공개 메서드 |
-|------|-------------|
-| `sqs/client.py` | `receive_message`, `delete_message`, `extend_visibility`, `get_visibility_timeout` |
-| `s3/client.py` | `download_requirements`, `download_assets`, `upload_source`, `upload_artifact` |
-| `dynamo/client.py` | `get_job_status`, `update_status`, `append_log` |
+No `*_new.py`, `*_modified.py`, `*_copy.py`, alternate status package, or DynamoDB fallback was created. Application code remains in the workspace root; this documentation directory contains Markdown only.
 
-### 1.5 처리 모듈
+## 3. Implemented Contracts
 
-| 파일 | 역할 |
-|------|------|
-| `ai/refiner.py` | `PromptRefiner.refine()` - raw JSON guardrail prompt, Hermes one-shot, 3회 retry, atomic output, raw fallback |
-| `ai/generator.py` | `AIGenerator.generate_code()` - refined prompt 또는 raw fallback으로 kiro-cli 호출 + 결과 검증 |
-| `build/builder.py` | `ApkBuilder.build_apk()` - Gradle Wrapper 확보 → assembleDebug → APK 복사 |
-| `worker/visibility_extender.py` | `VisibilityExtender` - daemon thread, 컨텍스트 매니저 지원 |
-| `worker/orchestrator.py` | `WorkerOrchestrator` - 메인 루프, `process_job`, Graceful Shutdown |
+### 3.1 Status API Client
 
-### 1.6 유틸리티 (`utils/`)
+`StatusApiClient.update_job_status()`:
 
-| 파일 | 역할 |
-|------|------|
-| `utils/log_sanitizer.py` | `sanitize_log()` - AWS Key/Token/Presigned URL/자격증명 마스킹 |
-| `utils/cleanup.py` | `prepare_workdir()`, `cleanup_old_workdirs()` |
+- Composes `{normalizedBase}/v1/jobs/{jobId}/status`, issues PATCH only, and exposes no GET method.
+- Always sends `Content-Type: application/json`; sends `x-api-key` only for a configured nonblank key.
+- Uses exact JSON field names and omits every `None`: `status`, `progress`, `message`, `artifactKey`, `errorCode`.
+- Passes `timeout=(3, 10)` on every attempt and uses requests' default TLS certificate verification.
+- Treats every 2xx as success without parsing or reading the response body.
+- Retries HTTP 5xx only, up to three total attempts, with delays `[1.0, 2.0]`.
+- Does not retry 4xx, connection errors, connect/read timeouts, or other non-2xx/non-5xx results.
+- Raises typed, sanitized `StatusApiFailure` data after final failure.
+- Logs allowlisted metadata only; it excludes headers, keys, payloads, raw external exceptions, and response bodies.
 
-### 1.7 배포 (`deploy/`)
+### 3.2 Orchestrator Lifecycle
 
-| 파일 | 역할 |
-|------|------|
-| `deploy/prompton-worker.service` | systemd unit (자동 재시작, SIGTERM 300초 대기, 보안 강화) |
-| `deploy/env.example` | 환경 변수 템플릿 (AWS 자격증명 미포함) |
+Every valid SQS delivery recreates the workspace and reprocesses the Job. There is no status GET or terminal-state skip.
 
-### 1.8 테스트 (`tests/`)
+1. Start visibility extension.
+2. Best-effort PATCH `ANALYZING`, progress 25, `요구조건을 분석하고 있습니다.`.
+3. Re-download inputs and run retained analysis/refinement behavior.
+4. Best-effort PATCH `GENERATING_CODE`, progress 50, `Android 코드를 생성하고 있습니다.`.
+5. Run retained Hermes fallback and Kiro generation behavior.
+6. Best-effort PATCH `BUILDING`, progress 75, `APK를 빌드하고 있습니다.`.
+7. Build the APK and retain source upload behavior.
+8. Upload the artifact and complete S3 HeadObject/size verification.
+9. Mandatorily PATCH `SUCCESS`, progress 100, `앱 생성이 완료되었습니다.`, and `jobs/{jobId}/artifact/app-debug.apk`.
+10. Delete the SQS message only after SUCCESS returns 2xx.
+11. Stop visibility extension on every exit path.
 
-| 파일 | 테스트 수 |
-|------|-----------|
-| `tests/conftest.py` | 공용 fixture (`config`, `job_id`) |
-| `tests/test_config.py` | 11 |
-| `tests/test_sqs_client.py` | 11 |
-| `tests/test_s3_client.py` | 15 (moto) |
-| `tests/test_dynamo_client.py` | 10 (moto) |
-| `tests/test_orchestrator.py` | 25 |
-| `tests/test_visibility_extender.py` | 6 |
-| `tests/test_prompt_refiner.py` | 10 |
-| `tests/test_ai_generator.py` | 9 |
-| `tests/test_requirements_contract.py` | 11 (optional reference) |
-| `tests/test_builder.py` | 7 |
-| `tests/test_cleanup.py` | 17 (cleanup + log_sanitizer) |
-| **합계** | **132** |
+Intermediate reporting failures are warnings and do not stop processing. A processing failure sends best-effort `FAILED` with a safe message/error code, omitting progress and artifact; reporting failure cannot replace the original classification. Final SUCCESS reporting failure becomes `INTERNAL_ERROR`, triggers best-effort FAILED, and preserves the SQS message. DeleteMessage failure after accepted SUCCESS logs a sanitized warning, sends no contradictory FAILED, and leaves the message for redelivery.
 
----
+### 3.3 Configuration, Dependencies, and Deployment
 
-## 2. 비즈니스 규칙 구현 매핑
+- Required: `SQS_QUEUE_URL`, `S3_BUCKET_NAME`, `PROMPTON_API_BASE_URL`.
+- Optional secret: `PROMPTON_STATUS_API_KEY`; blank values become `None`, and the key is excluded from Config repr.
+- Removed: `DYNAMODB_TABLE_NAME`.
+- Direct runtime dependency: `requests==2.34.2`.
+- Retained exact dependencies include `boto3==1.35.99` and `jsonschema==4.25.1`.
+- Dev extras: `moto[sqs,s3]==5.0.28`, `boto3-stubs[sqs,s3]==1.35.99`; no DynamoDB-only stub remains resolved.
+- systemd retains `Restart=on-failure`, `RestartSec=5`, `TimeoutStopSec=300`, dedicated identity, journald output, and hardening. Writable paths include `/data/jobs` and `/data/gradle` plus retained tool paths.
+- Production `ExecStart` remains `/opt/prompton-ai-worker/.venv/bin/python -m main`; it was not changed for the development host.
+- No Worker IAM/IaC policy file exists in this repository; deployed DynamoDB permission removal is external readiness evidence.
 
-| 규칙 | 구현 위치 | 검증 테스트 |
-|------|-----------|-------------|
-| BR-001 중복 처리 방지 | `orchestrator._skip_if_already_done` | `test_process_job_skips_terminal_status` |
-| BR-002 메시지 삭제 시점 | `orchestrator._phase_finalize` (마지막 단계) | `test_process_job_happy_path` |
-| BR-003 실패 시 메시지 유지 | `orchestrator.process_job` except 블록 | `test_process_job_ai_failure` |
-| BR-004 상태 전이 순서 | `_phase_analyzing` → `_generating_code` → `_building` → `_finalize` | `test_process_job_happy_path` |
-| BR-005 상태 갱신 원자성 | `DynamoClient.update_status` (단일 UpdateItem) | `test_update_status_writes_atomically` |
-| BR-006 artifactKey 기록 시점 | `S3Client.upload_artifact` head_object 검증 후 전달 | `test_process_job_artifact_upload_failure` |
-| BR-007 progress 고정값/유지 | `JOB_PROGRESS`, 실패 시 `progress=None` | `test_failure_does_not_overwrite_progress` |
-| BR-008 에러 코드 분류 | `models.exceptions.classify_error` | `test_process_job_ai_failure` (parametrize) |
-| BR-009 실패 메시지 보안 | `user_message_for` (사전 정의 메시지만) | `test_failure_message_has_no_internal_detail` |
-| BR-010 VT 50% 연장 | `EXTEND_INTERVAL_RATIO = 0.5` | `test_interval_is_half_of_visibility_timeout` |
-| BR-011 연장 실패 무시 | `VisibilityExtender._run` except | `test_extend_failure_does_not_raise` |
-| BR-012 로그 기록 시점 | 각 phase의 `append_log` 호출 | `test_process_job_writes_required_logs` |
-| BR-013 로그 보안 | `sanitize_log` (update_status/append_log에서 적용) | `test_sanitize_masks_*` 7건 |
-| BR-014 에셋 선택적 처리 | `download_assets` 빈 리스트 반환, 확장자/개수 제한 | `test_download_assets_*` 3건 |
-| BR-015 APK 저장 위치 | `S3Paths.for_job` → `jobs/{jobId}/artifact/app-debug.apk` | `test_process_job_happy_path` |
-| BR-016 소스 저장 | `upload_source` (빌드 성공 후, 실패 허용) | `test_upload_source_creates_zip` |
-| BR-017 디렉토리 멱등 생성 | `prepare_workdir` (삭제 후 재생성) | `test_process_job_recreates_workdir` |
-| BR-018 24시간 정리 | `cleanup_old_workdirs`, 루프 최상단 호출 | `test_run_performs_cleanup_before_receive` |
-| BR-019 SQS 메시지 검증 | `SQSMessage.from_raw` | `test_receive_message_rejects_*` 4건 |
-| BR-020 raw requirements.json 검증 | `S3Client.download_requirements` (64 KiB, UTF-8, JSON object) | raw/empty/invalid UTF-8/non-object/oversize S3 tests |
-| BR-021 Hermes refinement/fallback | `PromptRefiner.refine`, `orchestrator._phase_generating_code`, `AIGenerator.generate_code` | `tests/test_prompt_refiner.py`, refined/raw orchestrator and generator tests |
+## 4. Validation Evidence
 
----
+| Gate | Evidence |
+|---|---|
+| Configuration/model target | 18 tests passed; Ruff, strict mypy, compileall, lock/manifest assertions passed. |
+| Status API client target | 19 tests passed; Ruff, strict mypy, compileall passed. |
+| Orchestrator/components | 82 tests passed; Ruff, strict mypy, compileall passed. |
+| Runtime/deployment target | 69 tests passed; Ruff, strict source mypy over 25 files, compileall/deployment assertions passed. |
+| Full regression | 149 tests passed with 70 botocore deprecation warnings. |
+| Repository lint | `uv run ruff check .` passed. |
+| Repository typing | `uv run mypy .` passed for 39 files without weakening strictness. |
+| Compilation | `uv run python -m compileall -q .` passed. |
+| Lock/install | `uv lock --check` and `uv sync --frozen --extra dev` passed. |
+| Source/security scan | 25 runtime files scanned; zero prohibited DynamoDB, status GET, terminal precheck, append-log, TLS-disable, response-body logging, credential-shaped production literal, or duplicate fallback paths. |
+| Diff hygiene | `git diff --check -- . ':(exclude)aidlc-docs/audit.md'` passed. The append-only audit is excluded because raw history and Markdown hard breaks remain exact. |
+| systemd | Direct local verify is blocked only because the deployed `/opt` executable is absent. A temporary host-compatible substitution passed syntax verification; exact production values were separately asserted. |
 
-## 3. NFR 설계 패턴 구현 매핑
+No test called the live Status API, enqueued a Job, consumed Hermes/Kiro capacity, deployed code, or changed AWS/IAM/network resources.
 
-| 패턴 | 구현 위치 |
-|------|-----------|
-| P1 Automatic Retry | `config.settings.build_boto_config` (adaptive, max 3) |
-| P2 Visibility 연장 | `worker/visibility_extender.py` |
-| P3 Idempotent Consumer | `_skip_if_already_done` + `prepare_workdir` |
-| P4 External Process Policy | Hermes는 bounded retry 후 fallback; AIGenerator/ApkBuilder는 fail-fast |
-| P5 DLQ | 인프라 설정 (Worker는 실패 시 메시지 유지만 담당) |
-| P6 Process Supervisor | `deploy/prompton-worker.service` `Restart=on-failure` |
-| P7 Graceful Shutdown | `_install_signal_handlers`, `_handle_shutdown`, `TimeoutStopSec=300` |
-| P8 최소 권한 IAM | 인프라 설정 (코드에서 권한 요구사항 준수) |
-| P9 Credential-Free 인증 | boto3 기본 자격증명 체인, `env.example`에 Key 미포함 |
-| P10 Log Sanitization | `utils/log_sanitizer.py` |
-| P11 Long Polling | `sqs.client.LONG_POLL_WAIT_SECONDS = 20` |
-| P12 Workspace Isolation | `JobWorkDir.for_job` (`/data/jobs/{jobId}`), 권한 700 |
-| P13 Structured Logging | `main.setup_logging` (stdout → journald) |
-| P14 Periodic Cleanup | `cleanup_old_workdirs` 루프 호출 |
+## 5. Requirement Traceability - 25 IDs
 
----
+| ID | Implementation/evidence |
+|---|---|
+| `FR-SA-001` | Config URL normalization and PATCH-only path construction; URL/header tests. |
+| `FR-SA-002` | Conditional encapsulated `x-api-key`; header and secret-exclusion tests. |
+| `FR-SA-003` | Dedicated injectable `StatusApiClient.update_job_status()`; client/orchestrator tests. |
+| `FR-SA-004` | Exact ANALYZING command; payload/sequence tests. |
+| `FR-SA-005` | Exact GENERATING_CODE command/message; payload/sequence tests. |
+| `FR-SA-006` | Exact BUILDING command; payload/sequence tests. |
+| `FR-SA-007` | Artifact verification → SUCCESS 2xx → DeleteMessage; strict order/failure tests. |
+| `FR-SA-008` | Safe FAILED payload, six classifications, omission/original-error/SUCCESS-failure tests. |
+| `FR-SA-009` | Any-2xx body-independent success and immediate nonretry outcomes; response matrix. |
+| `FR-SA-010` | 5xx-only three attempts and `[1.0, 2.0]`; fake session/sleep tests. |
+| `FR-SA-011` | Exact `(3, 10)` per attempt; recorded-call tests. |
+| `FR-SA-012` | Best-effort intermediate/FAILED versus mandatory SUCCESS; failure matrix. |
+| `FR-SA-013` | No GET, DynamoDB read, or terminal skip; source scan/no-GET tests. |
+| `FR-SA-014` | Redelivery recreates workspace and runs full pipeline; repeated-delivery tests. Backend idempotency is external. |
+| `FR-SA-015` | Deleted append-log/Dynamo adapter; zero-path scan. |
+| `FR-SA-016` | Allowlisted journald events; correlation/sensitive-data caplog tests. |
+| `FR-SA-017` | Required API URL, optional protected key, removed table variable; config/main/env tests/scans. |
+| `FR-SA-018` | Exact requests pin, frozen lock, SQS/S3-only extras, no DynamoDB stub; manifest/lock gates. |
+| `NFR-SA-001` | Runtime needs no DynamoDB actions; deployed IAM inspection is external Build and Test evidence. |
+| `NFR-SA-002` | TLS default/zero disable path local; deployed TCP 443 reachability is external evidence. |
+| `NFR-SA-003` | Empty key template, protected repr/logging, 0640 guidance; deployed file inspection is external. |
+| `TR-SA-001` | 19 deterministic Status client contract/security tests passed. |
+| `TR-SA-002` | 24 target orchestrator tests plus retained component regression passed. |
+| `TR-SA-003` | 149 tests, Ruff, strict mypy, compileall, lock/frozen sync, deployment validation passed. |
+| `TR-SA-004` | Worker mock/contract readiness complete; approved dev Job, Backend GET, S3/SQS, and Mobile evidence remain external. |
 
-## 4. 검증 결과
+## 6. NFR Traceability - 49 IDs by Category
 
-| 검사 | 명령 | 결과 |
-|------|------|------|
-| 단위 테스트 | `pytest` | 132 passed, 98 warnings |
-| 린트 | `ruff check .` | All checks passed |
-| 타입 체크 (strict) | `mypy main.py config models sqs s3 dynamo ai build utils worker` | Success, no issues (25 files) |
+| Category and IDs | Implementation/test or external boundary |
+|---|---|
+| Performance: `NFR-PERF-001`, `NFR-PERF-002`, `NFR-PERF-003`, `NFR-PERF-004`, `NFR-PERF-005`, `NFR-PERF-006` | No subprocess timeout/concurrency added; retained one-message long polling; exact HTTP timeout/retry/body behavior tested. |
+| Reliability local: `NFR-REL-001`, `NFR-REL-002`, `NFR-REL-003`, `NFR-REL-004`, `NFR-REL-005`, `NFR-REL-006`, `NFR-REL-007` | Full redelivery, degradation, completion barrier, error preservation, post-SUCCESS delete, visibility, shutdown/service recovery implemented/tested. |
+| Reliability external: `NFR-REL-008`, `NFR-REL-009` | Queue/DLQ attributes and Backend repeated-status/SUCCESS idempotency require approved deployment/contract evidence. |
+| Availability: `NFR-AVAIL-001` | Preserved one process, systemd restart, SQS redelivery/DLQ; no unapproved HA/RTO/RPO target. |
+| Security local: `NFR-SEC-001`, `NFR-SEC-002`, `NFR-SEC-004`, `NFR-SEC-006`, `NFR-SEC-007`, `NFR-SEC-008` | No DynamoDB path; TLS default; protected key; workspace/writable paths; sentinel log exclusion; systemd hardening. |
+| Security external: `NFR-SEC-003`, `NFR-SEC-005` | TCP 443 and deployed env owner/group/mode/static-credential inspection require target-host evidence. |
+| Observability: `NFR-OBS-001`, `NFR-OBS-002`, `NFR-OBS-003`, `NFR-OBS-004`, `NFR-OBS-005`, `NFR-OBS-006` | Correlated allowlisted events/levels; no DB/backend log persistence or response body; metrics/alarms out of scope. |
+| Operations local: `NFR-OPS-001`, `NFR-OPS-002`, `NFR-OPS-003`, `NFR-OPS-006`, `NFR-OPS-007` | Fail-fast config, service values, reproducible dependencies, forward-fix and live-test authorization boundaries checked. |
+| Operations external: `NFR-OPS-004`, `NFR-OPS-005` | Cleanup/writable paths local; target disk, endpoint, TCP 443, auth readiness require target-host evidence. |
+| Scalability local: `NFR-SCALE-001`, `NFR-SCALE-003` | One Job/process retained; no autoscaling/concurrency. Backend idempotency precedes horizontal rollout. |
+| Scalability external: `NFR-SCALE-002` | Instance, memory, disk, duration observations belong in approved dev E2E evidence. |
+| Maintainability local: `NFR-MAINT-001`, `NFR-MAINT-002`, `NFR-MAINT-003`, `NFR-MAINT-004` | Deterministic fakes/order tests, all local gates/scans, env/service assertions, compatible unit verification passed. |
+| Maintainability staged: `NFR-MAINT-005` | Active artifacts use Status API authority; historical Build and Test instructions are superseded and regenerate next stage. |
+| Usability: `NFR-USE-001` | Exact Korean messages/progress/safe errors tested; interactive accessibility is N/A for a headless Worker. |
+| E2E external: `NFR-E2E-001`, `NFR-E2E-002` | Defined evidence requires approved dev Job and Backend/Mobile participants; no live action occurred. |
+| E2E ownership: `NFR-E2E-003` | Worker Status/orchestrator automation complete; Backend GET/Mobile display remain external. |
 
----
+## 7. Story Traceability - 7 Stories
 
-## 5. 계획 대비 변경 사항
+| Story | Completed Worker implementation and automated evidence | External boundary |
+|---|---|---|
+| `US-SA-01` | API config/client boundary, DynamoDB code/config removal, exact lock/frozen sync, startup/deployment/source scans. | Deployed IAM policy inspection. |
+| `US-SA-02` | Exact intermediate commands/payloads/sequence, any-2xx, and degradation tests. | Backend/Mobile E2E observation. |
+| `US-SA-03` | S3 verification before SUCCESS, SUCCESS before delete, and failure/order tests. | Live S3, Backend GET, SQS evidence. |
+| `US-SA-04` | Safe classifications, omission, error preservation, no-delete, INTERNAL_ERROR tests. | Optional live failure display. |
+| `US-SA-05` | Timeout, 2xx, 5xx retry/backoff, 4xx/network/timeout tests. | Live endpoint joint acceptance. |
+| `US-SA-06` | Conditional key, TLS, protected config/logs, events, removed DB logs, env/service scans. | TCP 443 and deployed env permissions. |
+| `US-SA-07` | Full automated gates, mock contracts, service/env checks, external evidence checklist ready. | Approved dev Job, evidence bundle, Backend GET, Mobile, queue/DLQ, target host. |
 
-| 항목 | 계획 | 실제 | 근거 |
-|------|------|------|------|
-| `tests/conftest.py` | 미포함 | 추가 | 공용 fixture(`config`, `job_id`) 중복 제거 |
-| `build_boto_config()` | 위치 미지정 | `config/settings.py` | 3개 클라이언트가 공유하는 설정이므로 config에 배치 |
-| `models/entities.py`의 `Config` | domain-entities.md 초기 필드 | `log_level`, `hermes_cli_path`, `kiro_cli_path`, `gradle_path` 추가 | 외부 실행 파일 경로와 운영 로그 설정 주입 필요 |
-| `sqs` 모듈 | `get_queue_attributes` | `get_visibility_timeout(fallback)` | BR-010의 실제 용도(VT 조회)에 맞춘 구체적 인터페이스 |
-| log_sanitizer 40자 패턴 | `[A-Za-z0-9/+=]{40}` | 독립 토큰 + 대소문자 혼재 조건 추가 | 원 패턴은 git SHA 등 정상 문자열까지 마스킹하여 로그 유용성 저하. BR-013 보호 범위는 유지 |
-| `upload_source` 실패 처리 | 미지정 | 예외 대신 경고 로그 후 계속 | APK가 핵심 산출물이며 소스는 디버깅 보조자료 (BR-016) |
+All seven story checkboxes may be completed for assigned Worker implementation and automated evidence. Per the approved plan, deferred live Backend/Mobile acceptance remains mandatory Build and Test evidence and does not reopen Worker Code Generation.
 
----
+## 8. Accepted External Boundaries
 
-## 6. 미결정 사항 및 후속 조치 필요 항목
+Not executed during Code Generation:
 
-| 항목 | 현재 구현 | 확정 시 수정 위치 |
-|------|-----------|-------------------|
-| kiro-cli CLI 인터페이스 | `chat --no-interactive --model claude-opus-5 --trust-tools=fs_read,fs_write <prompt>` (2.18.1 검증) | kiro-cli 버전 변경 시 `chat --help`와 모델 목록 호환성 재검증 |
-| S3 Client 요청 계약 | 임의 UTF-8 JSON object, 최대 64 KiB; canonical schema는 optional reference | 실제 Backend 저장소에서 raw object upload/SQS pointer 연결 |
-| Hermes | v0.20.4 `--ignore-rules --toolsets context_engine --oneshot`, host 기본 provider/model | 배포 서비스 사용자의 `HERMES_HOME` 설정·인증과 live 호출 검증 |
-| Android SDK/Gradle 경로 | 환경 변수로 주입 (`env.example` 참고) | `deploy/env.example`, systemd `ReadWritePaths` |
+1. Inspect/change deployed Worker IAM to prove DynamoDB actions absent.
+2. Verify outbound TCP 443 from target EC2.
+3. Inspect deployed env ownership/mode (0640 or stricter).
+4. Record queue/DLQ attributes, including planned `maxReceiveCount=3`.
+5. Run an approved dev Job through live Status API/S3/SQS.
+6. Confirm states/artifact through Backend GET and Mobile App.
+7. Collect target capacity, APK hash, commit SHA, and sanitized live evidence.
 
----
+These require explicit authorization and belong to Build and Test/an approved test window. No commit, push, deployment, AWS/IAM/network mutation, live API call, queue action, or model consumption occurred.
 
-## 7. 실행 방법 (로컬 검증)
+## 9. Local Reproduction
 
 ```bash
-# 의존성 설치
-uv sync --extra dev
-
-# 단위 테스트
-uv run pytest
-
-# 린트 + 타입 체크
+uv lock --check
+uv sync --frozen --extra dev
+uv run pytest -q
 uv run ruff check .
-uv run mypy main.py config models sqs s3 dynamo ai build utils worker
+uv run mypy .
+uv run python -m compileall -q .
+git diff --check -- . ':(exclude)aidlc-docs/audit.md'
 ```
 
-배포 및 통합 테스트 절차는 Build and Test 단계에서 정의한다.
+The Security Baseline, Resiliency Baseline, and Property-Based Testing extensions remain disabled as approved. Project-specific security, reliability, and deterministic test requirements above were enforced.
