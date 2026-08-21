@@ -29,8 +29,9 @@ The Security Baseline, Resiliency Baseline, and Property-Based Testing extension
 
 ### NFR-PERF-003: SQS Polling
 
-- Long polling MUST use `WaitTimeSeconds=20` and `MaxNumberOfMessages=1`.
-- **Pass condition**: SQS client unit test records both values.
+- Short polling MUST use `WaitTimeSeconds=0` and `MaxNumberOfMessages=1`.
+- After an empty response, the orchestrator MUST wait 0.5 seconds before the next receive unless shutdown is already requested.
+- **Pass condition**: SQS client and orchestrator tests record the exact receive parameters and 0.5-second empty cadence.
 
 ### NFR-PERF-004: Per-Attempt Status API Timeout
 

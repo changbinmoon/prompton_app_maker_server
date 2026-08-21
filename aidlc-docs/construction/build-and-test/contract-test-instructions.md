@@ -163,7 +163,7 @@ Acceptance rules:
 - Requirements bucket/key are nonblank strings.
 - `assetsPrefix` is a string and may identify an empty prefix.
 - Invalid messages are not deleted by the Worker.
-- Receive uses long polling 20 seconds and maximum one message.
+- Receive uses zero-second short polling, maximum one message, and a 0.5-second delay after empty responses.
 
 ## 6. Raw Requirements and S3 Contract
 

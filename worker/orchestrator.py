@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import time
 import types
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: SQS short poll이 빈 응답을 반환한 뒤 다음 receive까지 대기하는 시간.
+EMPTY_POLL_DELAY_SECONDS = 0.5
+
 
 class WorkerOrchestrator:
     """Process exactly one SQS Job at a time."""
@@ -47,13 +51,9 @@ class WorkerOrchestrator:
         self._config = config
         self._sqs = sqs_client if sqs_client is not None else SQSClient(config)
         self._s3 = s3_client if s3_client is not None else S3Client(config)
-        self._status = (
-            status_client if status_client is not None else StatusApiClient(config)
-        )
+        self._status = status_client if status_client is not None else StatusApiClient(config)
         self._refiner = (
-            prompt_refiner
-            if prompt_refiner is not None
-            else PromptRefiner(config.hermes_cli_path)
+            prompt_refiner if prompt_refiner is not None else PromptRefiner(config.hermes_cli_path)
         )
         self._ai = ai_generator if ai_generator is not None else AIGenerator(config)
         self._builder = apk_builder if apk_builder is not None else ApkBuilder(config)
@@ -63,9 +63,7 @@ class WorkerOrchestrator:
     def run(self) -> None:
         """Poll and process messages sequentially until shutdown is requested."""
         self._install_signal_handlers()
-        self._visibility_timeout = self._sqs.get_visibility_timeout(
-            self._config.visibility_timeout
-        )
+        self._visibility_timeout = self._sqs.get_visibility_timeout(self._config.visibility_timeout)
         logger.info("worker_loop_started")
 
         while not self._shutdown_requested:
@@ -76,8 +74,12 @@ class WorkerOrchestrator:
                 logger.error("sqs_receive_failed action=continue")
                 continue
 
-            if message is not None:
-                self.process_job(message)
+            if message is None:
+                if not self._shutdown_requested:
+                    time.sleep(EMPTY_POLL_DELAY_SECONDS)
+                continue
+
+            self.process_job(message)
 
         logger.info("worker_loop_stopped")
 
@@ -243,8 +245,7 @@ class WorkerOrchestrator:
             )
         except Exception:  # noqa: BLE001 - do not replace the original Job error
             logger.error(
-                "failed_status_reporting_failed job_id=%s original_error_code=%s "
-                "kind=UNEXPECTED",
+                "failed_status_reporting_failed job_id=%s original_error_code=%s kind=UNEXPECTED",
                 job_id,
                 error_code.value,
             )

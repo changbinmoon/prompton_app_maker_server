@@ -158,8 +158,8 @@ class Config:
 ```text
 while shutdown is not requested:
     remove expired Job workspaces; warn on cleanup failure
-    receive at most one SQS message with 20-second long polling
-    if no message: continue
+    receive at most one SQS message with zero-second short polling
+    if no message: wait 0.5 seconds unless shutting down, then continue
     if envelope is invalid: log sanitized category and preserve it for redrive
     if message is valid: call process_job and wait for it to return
 ```
@@ -397,7 +397,7 @@ artifact verified
 
 ### SQSClient
 
-- Receive uses `WaitTimeSeconds=20` and `MaxNumberOfMessages=1`.
+- Receive uses `WaitTimeSeconds=0` and `MaxNumberOfMessages=1`; empty responses wait 0.5 seconds in the orchestrator.
 - Public operations remain receive, delete, visibility change, and queue attributes.
 - boto3 uses the EC2 Instance Profile and scoped SQS permissions.
 - The client never decides that a Job is complete.

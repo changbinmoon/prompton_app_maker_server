@@ -35,7 +35,7 @@ AI Worker의 책임은 SQS에 등록된 Job을 가져오는 시점부터 시작�
                                               │
                                               ├── SQS Job 수신
                                               ├── S3 입력 다운로드
-                                              ├── AI 처리 (kiro-cli + Opus5)
+                                              ├── AI 처리 (kiro-cli + Claude Opus 5)
                                               ├── 코드 생성
                                               ├── APK 빌드 (Gradle Wrapper)
                                               ├── S3 결과 업로드
@@ -50,7 +50,7 @@ AI Worker의 책임은 SQS에 등록된 Job을 가져오는 시점부터 시작�
 |------|------|
 | **프로그래밍 언어** | Python (권장 - boto3, 풍부한 AI/ML 생태계) |
 | **배포 환경** | EC2 인스턴스 (IAM Role / Instance Profile) |
-| **AI 코드 생성** | kiro-cli + Opus5 (EC2 서버에서 실행) |
+| **AI 코드 생성** | kiro-cli + Claude Opus 5 (EC2 서버에서 실행) |
 | **APK 빌드** | EC2에 Android SDK/Gradle 사전 설치, 프로젝트별 Gradle Wrapper 생성 |
 | **동시 처리** | 1개 (단일 Job 순차 처리) |
 | **AWS Region** | us-east-1 |
@@ -125,7 +125,7 @@ AI Worker의 책임은 SQS에 등록된 Job을 가져오는 시점부터 시작�
   - 이미지가 없는 Job도 정상 처리된다
 
 ### FR-006: AI 요구조건 분석 및 코드 생성
-- **설명**: kiro-cli + Opus5를 사용하여 requirements.json 기반으로 앱 코드를 생성한다
+- **설명**: kiro-cli + Claude Opus 5를 사용하여 requirements.json 기반으로 앱 코드를 생성한다
 - **입력**: requirements.json, assets (있을 경우)
 - **출력**: Android 프로젝트 코드
 - **수락 기준**:
@@ -140,12 +140,15 @@ AI Worker의 책임은 SQS에 등록된 Job을 가져오는 시점부터 시작�
 
 ### FR-008: APK 빌드
 - **설명**: 생성된 Android 프로젝트에 Gradle Wrapper를 생성하고 APK를 빌드한다
-- **환경**: EC2에 사전 설치된 Android SDK + Gradle
-- **빌드 방식**: 프로젝트별 Gradle Wrapper 생성 후 `./gradlew assembleDebug` 실행
+- **환경**: EC2에 Android SDK Platform/Build Tools 36과 Gradle/JDK 사전 설치
+- **생성 SDK 정책**: `minSdk=26`, `compileSdk=36`, `targetSdk=36`, Client API level 무시
+- **생성 도구 조합**: AGP 8.10.1, Gradle 8.11.1, JDK 17, Kotlin 1.9.24, Compose compiler 1.5.14, Compose BOM 2024.06.00
+- **빌드 방식**: Worker가 검증·생성한 프로젝트별 Gradle Wrapper로 `./gradlew assembleDebug` 실행
 - **출력**: `app-debug.apk`
 - **수락 기준**:
-  - Gradle Wrapper를 생성할 수 있다
+  - Gradle Wrapper를 생성하고 JAR 무결성을 검증할 수 있다
   - assembleDebug 태스크를 실행하여 APK를 빌드할 수 있다
+  - 생성 Compose API가 고정 dependency stack과 호환되고 experimental API opt-in이 명시된다
   - 빌드 실패 시 적절한 에러를 반환한다
 
 ### FR-009: APK 업로드
@@ -259,11 +262,11 @@ AI Worker의 책임은 SQS에 등록된 Job을 가져오는 시점부터 시작�
          |
 [6] S3 ListObjects + GetObject → assets 다운로드 (있을 경우)
          |
-[7] kiro-cli + Opus5 → 요구조건 분석
+[7] kiro-cli + Claude Opus 5 → 요구조건 분석
          |
 [8] DynamoDB UpdateItem → status = GENERATING_CODE, progress = 50
          |
-[9] kiro-cli + Opus5 → 코드 생성
+[9] kiro-cli + Claude Opus 5 → 코드 생성
          |
 [10] S3 PutObject → 생성 코드 저장 (source/)
          |
@@ -373,7 +376,7 @@ jobs/{jobId}/
 - [ ] S3에서 requirements.json을 읽을 수 있음
 - [ ] assets가 있으면 읽을 수 있음
 - [ ] DynamoDB 상태를 ANALYZING으로 변경할 수 있음
-- [ ] AI 코드 생성이 가능함 (kiro-cli + Opus5)
+- [ ] AI 코드 생성이 가능함 (kiro-cli + Claude Opus 5)
 - [ ] DynamoDB 상태를 GENERATING_CODE로 변경
 - [ ] APK Build 가능 (Gradle Wrapper)
 - [ ] DynamoDB 상태를 BUILDING으로 변경

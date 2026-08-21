@@ -164,7 +164,7 @@ No test called the live Status API, enqueued a Job, consumed Hermes/Kiro capacit
 
 | Category and IDs | Implementation/test or external boundary |
 |---|---|
-| Performance: `NFR-PERF-001`, `NFR-PERF-002`, `NFR-PERF-003`, `NFR-PERF-004`, `NFR-PERF-005`, `NFR-PERF-006` | No subprocess timeout/concurrency added; retained one-message long polling; exact HTTP timeout/retry/body behavior tested. |
+| Performance: `NFR-PERF-001`, `NFR-PERF-002`, `NFR-PERF-003`, `NFR-PERF-004`, `NFR-PERF-005`, `NFR-PERF-006` | No subprocess timeout/concurrency added; one-message short polling uses a 0.5-second empty cadence; exact HTTP timeout/retry/body behavior tested. |
 | Reliability local: `NFR-REL-001`, `NFR-REL-002`, `NFR-REL-003`, `NFR-REL-004`, `NFR-REL-005`, `NFR-REL-006`, `NFR-REL-007` | Full redelivery, degradation, completion barrier, error preservation, post-SUCCESS delete, visibility, shutdown/service recovery implemented/tested. |
 | Reliability external: `NFR-REL-008`, `NFR-REL-009` | Queue/DLQ attributes and Backend repeated-status/SUCCESS idempotency require approved deployment/contract evidence. |
 | Availability: `NFR-AVAIL-001` | Preserved one process, systemd restart, SQS redelivery/DLQ; no unapproved HA/RTO/RPO target. |

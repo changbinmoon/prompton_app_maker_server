@@ -81,7 +81,17 @@ def test_generate_code_success(
     assert str(output) in prompt
     assert "No Hermes-refined prompt is available" in prompt
     assert "Kotlin and Jetpack Compose" in prompt
-    assert "minSdk 26 and targetSdk 35" in prompt
+    assert "Always use minSdk 26, compileSdk 36, targetSdk 36" in prompt
+    assert "Android SDK Build Tools 36.0.0" in prompt
+    assert "Android Gradle Plugin 8.10.1, Gradle 8.11.1, JDK 17" in prompt
+    assert "Kotlin 1.9.24" in prompt
+    assert "Compose compiler 1.5.14" in prompt
+    assert "Compose BOM 2024.06.00" in prompt
+    assert "LinearProgressIndicator progress" in prompt
+    assert "ExperimentalFoundationApi" in prompt
+    assert "Do not create gradlew, gradlew.bat, or gradle-wrapper.jar" in prompt
+    assert "services.gradle.org" in prompt
+    assert "the Worker creates trusted Wrapper scripts and the binary JAR" in prompt
     assert "com.prompton.generated.j12345678123456781234567812345678" in prompt
     assert recorder.kwargs[0]["cwd"] == str(output)
 

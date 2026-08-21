@@ -19,7 +19,10 @@ from models.exceptions import (
     StatusApiFailure,
     StatusApiFailureKind,
 )
-from worker.orchestrator import WorkerOrchestrator
+from worker.orchestrator import (
+    EMPTY_POLL_DELAY_SECONDS,
+    WorkerOrchestrator,
+)
 
 
 class FakeSQSClient:
@@ -172,9 +175,7 @@ class FakeAIGenerator:
     ) -> Path:
         if self.error is not None:
             raise self.error
-        self.calls.append(
-            (requirements_path, assets_dir, output_dir, job_id, refined_prompt_path)
-        )
+        self.calls.append((requirements_path, assets_dir, output_dir, job_id, refined_prompt_path))
         output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "settings.gradle").write_text("x", encoding="utf-8")
         return output_dir
@@ -540,9 +541,7 @@ def test_visibility_extender_is_paired_on_every_path(
         "worker.orchestrator.VisibilityExtender",
         RecordingVisibilityExtender,
     )
-    builder = FakeApkBuilder(
-        error=BuildError(detail="build") if fail_build else None
-    )
+    builder = FakeApkBuilder(error=BuildError(detail="build") if fail_build else None)
     orchestrator, _ = build_orchestrator(config, builder=builder)
 
     orchestrator.process_job(message)
@@ -578,9 +577,7 @@ def test_process_job_uses_configured_visibility_timeout(
     orchestrator, _ = build_orchestrator(config, sqs=sqs)
 
     assert orchestrator._visibility_timeout == config.visibility_timeout
-    orchestrator._visibility_timeout = sqs.get_visibility_timeout(
-        config.visibility_timeout
-    )
+    orchestrator._visibility_timeout = sqs.get_visibility_timeout(config.visibility_timeout)
     assert orchestrator._visibility_timeout == 600
 
 
@@ -601,7 +598,12 @@ def test_run_stops_after_current_job(config: Config, message: SQSMessage) -> Non
     assert orchestrator.shutdown_requested is True
 
 
-def test_run_continues_after_receive_error(config: Config) -> None:
+def test_run_continues_after_receive_error(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("worker.orchestrator.time.sleep", sleeps.append)
     sqs = FakeSQSClient(messages=[None])
     sqs.receive_error = RuntimeError("receive")
     orchestrator, _ = build_orchestrator(config, sqs=sqs)
@@ -620,6 +622,32 @@ def test_run_continues_after_receive_error(config: Config) -> None:
     orchestrator.run()
 
     assert calls >= 3
+    assert sleeps == [EMPTY_POLL_DELAY_SECONDS]
+
+
+def test_run_waits_500ms_after_empty_poll(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("worker.orchestrator.time.sleep", sleeps.append)
+    sqs = FakeSQSClient()
+    orchestrator, _ = build_orchestrator(config, sqs=sqs)
+    calls = 0
+
+    def receive_then_stop() -> SQSMessage | None:
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            orchestrator._handle_shutdown(15, None)
+        return None
+
+    sqs.receive_message = receive_then_stop  # type: ignore[method-assign]
+    orchestrator.run()
+
+    assert calls == 2
+    assert EMPTY_POLL_DELAY_SECONDS == 0.5
+    assert sleeps == [EMPTY_POLL_DELAY_SECONDS]
 
 
 def test_run_performs_cleanup_before_receive(

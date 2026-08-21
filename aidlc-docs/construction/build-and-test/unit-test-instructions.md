@@ -59,7 +59,7 @@ A new warning category or a count change must be reviewed. Do not add a global w
 | `tests/test_prompt_refiner.py` | 10 | Hermes command, retry/output limits, atomic output, safe fallback/logging. |
 | `tests/test_requirements_contract.py` | 11 | Optional canonical reference schema only; not the runtime S3 ingress boundary. |
 | `tests/test_s3_client.py` | 15 | Raw JSON ingress, assets, source archive, artifact upload and HeadObject/size verification. |
-| `tests/test_sqs_client.py` | 11 | Long polling, one-message receive, schema validation, delete/visibility/attributes. |
+| `tests/test_sqs_client.py` | 11 | Zero-second short polling, one-message receive, schema validation, delete/visibility/attributes. |
 | `tests/test_status_api_client.py` | 19 | URL, headers, payload omission, any-2xx, timeout, retry matrix, typed failures, log secrecy. |
 | `tests/test_visibility_extender.py` | 6 | 50% cadence, repeated extension, warning-only failure, stop behavior. |
 | **Total** | **149** | Complete deterministic Worker gate. |
