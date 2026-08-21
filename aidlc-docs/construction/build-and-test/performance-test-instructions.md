@@ -19,7 +19,7 @@ It does not define a pass/fail throughput target or authorize live load/stress t
 |---|---|
 | `NFR-PERF-001` | No application timeout around Hermes, Kiro, or Gradle; record phase timing for measurement. |
 | `NFR-PERF-002` | One Worker process handles exactly one Job at a time. |
-| `NFR-PERF-003` | SQS long polling uses 20 seconds and maximum one message. |
+| `NFR-PERF-003` | SQS short polling returns immediately and waits 0.5 seconds after an empty response; maximum one message. |
 | `NFR-PERF-004` | Every Status API attempt uses connect/read timeout `(3, 10)`. |
 | `NFR-PERF-005` | Only 5xx retries; three total attempts and delays `[1.0, 2.0]`. |
 | `NFR-PERF-006` | Any 2xx succeeds without response-body parsing; reporting remains synchronous. |
@@ -49,7 +49,7 @@ Evidence must show:
 - Every fake PATCH records `(3, 10)`.
 - 4xx/network/timeout outcomes add no retry sleep.
 - Orchestrator completes one Job before the next receive/process cycle.
-- SQS receive uses `WaitTimeSeconds=20`, `MaxNumberOfMessages=1`.
+- SQS receive uses `WaitTimeSeconds=0`, `MaxNumberOfMessages=1`, and an empty-response sleep recorder observes exactly 0.5 seconds.
 - Visibility cadence remains 50% of the effective timeout, subject to the retained minimum.
 - A slow processing test double is not canceled by a Worker end-to-end timeout.
 

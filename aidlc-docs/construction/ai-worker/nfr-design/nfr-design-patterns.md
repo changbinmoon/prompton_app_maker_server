@@ -146,7 +146,7 @@ No background status queue or thread is added. This keeps local phase ordering o
 ### PAT-PERF-02: Sequential Single-Lane Processing
 
 - One process receives at most one message with `MaxNumberOfMessages=1` and processes it to return before the next Job begins.
-- Long polling uses `WaitTimeSeconds=20`.
+- Short polling uses `WaitTimeSeconds=0`; an empty response waits 0.5 seconds before the next receive.
 - Do not add async Job execution, multiprocessing, parallel message handling, or status-call parallelism.
 - Existing Hermes, Kiro, and Gradle subprocesses receive no new Worker timeout.
 
@@ -377,7 +377,7 @@ Live AWS/API/S3 mutation and model usage require separate test approval. Readine
 |---|---|
 | NFR-PERF-001 | PAT-PERF-02 preserves no Worker timeout for Hermes, Kiro, and Gradle; PAT-OBS-01 records phase timing. |
 | NFR-PERF-002 | PAT-PERF-02 keeps one sequential Job per process. |
-| NFR-PERF-003 | PAT-PERF-02 fixes long polling at 20 seconds and one message. |
+| NFR-PERF-003 | PAT-PERF-02 fixes one-message short polling with a 0.5-second empty cadence. |
 | NFR-PERF-004 | PAT-RES-01 and PAT-PERF-01 apply `(3, 10)` on every PATCH. |
 | NFR-PERF-005 | PAT-RES-01 applies 5xx-only attempts and `[1, 2]` delays. |
 | NFR-PERF-006 | PAT-RES-01 returns on any 2xx without body processing. |

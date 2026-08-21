@@ -5,15 +5,19 @@
 NFR 패턴: Pattern 4 (Fail-Fast for External Processes - 재시도 없음)
 
 전제: EC2에 Android SDK와 Gradle이 사전 설치되어 있고 ANDROID_HOME/ANDROID_SDK_ROOT가
-      설정되어 있다. 프로젝트에 Gradle Wrapper가 없으면 생성한 뒤 빌드한다.
+      설정되어 있다. 프로젝트의 Gradle Wrapper가 없거나 손상됐으면 신뢰된 Gradle로
+      격리 생성한 Wrapper를 설치한 뒤 빌드한다.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import stat
 import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +31,35 @@ logger = logging.getLogger(__name__)
 
 #: Gradle Wrapper 실행 스크립트 이름 (Linux)
 GRADLEW_SCRIPT = "gradlew"
+
+#: Gradle Wrapper 실행 스크립트 이름 (Windows, source archive용)
+GRADLEW_WINDOWS_SCRIPT = "gradlew.bat"
+
+#: Wrapper JAR 상대 경로
+GRADLE_WRAPPER_JAR = Path("gradle/wrapper/gradle-wrapper.jar")
+
+#: Wrapper properties 상대 경로
+GRADLE_WRAPPER_PROPERTIES = Path("gradle/wrapper/gradle-wrapper.properties")
+
+#: Wrapper JAR에 반드시 포함되어야 하는 진입점
+GRADLE_WRAPPER_MAIN_CLASS = "org/gradle/wrapper/GradleWrapperMain.class"
+
+#: 격리 생성 후 프로젝트에 설치할 Wrapper 산출물
+GRADLE_WRAPPER_ARTIFACTS: tuple[Path, ...] = (
+    Path(GRADLEW_SCRIPT),
+    Path(GRADLEW_WINDOWS_SCRIPT),
+    GRADLE_WRAPPER_JAR,
+    GRADLE_WRAPPER_PROPERTIES,
+)
+
+#: 생성 프로젝트에서 허용하는 공식 stable Gradle distribution URL.
+TRUSTED_GRADLE_DISTRIBUTION_RE = re.compile(
+    r"https://services\.gradle\.org/distributions/"
+    r"gradle-(?P<version>\d+(?:\.\d+){1,2})-(?P<kind>bin|all)\.zip"
+)
+
+#: properties 파일 최대 허용 크기
+MAX_WRAPPER_PROPERTIES_BYTES = 16 * 1024
 
 #: 빌드 태스크 (FR-008)
 GRADLE_BUILD_TASK = "assembleDebug"
@@ -46,7 +79,7 @@ MAX_OUTPUT_LOG_CHARS = 4000
 
 
 class ApkBuilder:
-    """Gradle Wrapper를 사용해 Debug APK를 빌드한다."""
+    """검증된 Gradle Wrapper를 사용해 Debug APK를 빌드한다."""
 
     def __init__(self, config: Config) -> None:
         """빌더를 초기화한다.
@@ -60,7 +93,7 @@ class ApkBuilder:
         """프로젝트를 빌드하고 APK를 지정 경로로 복사한다.
 
         처리 순서:
-            1. Gradle Wrapper 확보 (없으면 생성)
+            1. Gradle Wrapper 무결성 확인 (없거나 손상됐으면 격리 재생성)
             2. ./gradlew assembleDebug 실행
             3. 산출 APK 탐색 후 output_apk_path로 복사
 
@@ -95,43 +128,145 @@ class ApkBuilder:
         return output_apk_path
 
     def _ensure_wrapper(self, project_dir: Path) -> None:
-        """Gradle Wrapper를 확보한다 (FR-008).
+        """Gradle Wrapper를 검증하고 필요하면 격리 재생성한다 (FR-008).
 
-        gradlew가 이미 있으면 실행 권한만 보정하고, 없으면 `gradle wrapper`로 생성한다.
+        생성 프로젝트의 실행 script 존재만 신뢰하지 않는다. Wrapper JAR가 읽을 수 있는
+        ZIP이며 GradleWrapperMain 진입점을 포함하고, distribution URL이 공식 Gradle
+        stable URL인지 확인한다. 검증 실패 시 project build script를 읽지 않는 임시
+        최소 Gradle project에서 Wrapper를 생성해 산출물만 복사한다.
 
         Args:
             project_dir: 프로젝트 루트
 
         Raises:
-            BuildError: Wrapper 생성 실패
+            BuildError: Wrapper 생성 또는 생성 후 무결성 검증 실패
         """
-        gradlew = project_dir / GRADLEW_SCRIPT
-
-        if gradlew.is_file():
+        wrapper_spec = self._read_wrapper_spec(project_dir)
+        if self._wrapper_is_valid(project_dir) and wrapper_spec is not None:
+            gradlew = project_dir / GRADLEW_SCRIPT
             self._make_executable(gradlew)
-            logger.info("기존 Gradle Wrapper 사용: %s", gradlew)
+            logger.info("검증된 Gradle Wrapper 사용: %s", gradlew)
             return
 
-        logger.info("Gradle Wrapper 생성 시작 (%s)", project_dir)
-        result = self._run(
-            [self._gradle_path, GRADLE_WRAPPER_TASK],
-            project_dir,
-            "gradle wrapper",
-        )
+        logger.warning("Gradle Wrapper가 없거나 유효하지 않아 재생성합니다: %s", project_dir)
+        self._generate_wrapper(project_dir, wrapper_spec)
 
-        if result.returncode != 0:
-            raise BuildError(
-                detail=(
-                    f"Gradle Wrapper 생성 실패 (exit code={result.returncode}): "
-                    f"{self._tail(result.stderr)}"
+        generated_spec = self._read_wrapper_spec(project_dir)
+        if not self._wrapper_is_valid(project_dir) or generated_spec is None:
+            raise BuildError(detail="Gradle Wrapper 생성 후 무결성 검증에 실패했습니다")
+
+        self._make_executable(project_dir / GRADLEW_SCRIPT)
+        logger.info("Gradle Wrapper 생성 및 무결성 검증 완료")
+
+    def _generate_wrapper(
+        self,
+        project_dir: Path,
+        wrapper_spec: tuple[str, str] | None,
+    ) -> None:
+        """격리된 최소 Gradle project에서 Wrapper를 생성해 설치한다.
+
+        Args:
+            project_dir: Wrapper를 설치할 Android 프로젝트 루트
+            wrapper_spec: 공식 URL에서 추출한 (Gradle version, distribution type)
+
+        Raises:
+            BuildError: 임시 디렉토리, Gradle 실행 또는 산출물 복사 실패
+        """
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix=".prompton-gradle-wrapper-",
+                dir=str(project_dir.parent),
+            ) as temporary_dir:
+                wrapper_project = Path(temporary_dir)
+                (wrapper_project / "settings.gradle").write_text(
+                    "rootProject.name = 'prompton-wrapper-bootstrap'\n",
+                    encoding="utf-8",
                 )
-            )
 
-        if not gradlew.is_file():
-            raise BuildError(detail=f"Gradle Wrapper 생성 후에도 {GRADLEW_SCRIPT}가 없습니다")
+                command = [self._gradle_path, GRADLE_WRAPPER_TASK, "--no-daemon"]
+                if wrapper_spec is not None:
+                    version, distribution_type = wrapper_spec
+                    command.extend(
+                        [
+                            "--gradle-version",
+                            version,
+                            "--distribution-type",
+                            distribution_type,
+                        ]
+                    )
 
-        self._make_executable(gradlew)
-        logger.info("Gradle Wrapper 생성 완료")
+                result = self._run(command, wrapper_project, "gradle wrapper")
+                if result.returncode != 0:
+                    raise BuildError(
+                        detail=(
+                            f"Gradle Wrapper 생성 실패 (exit code={result.returncode}): "
+                            f"{self._tail(result.stderr or result.stdout)}"
+                        )
+                    )
+
+                for relative_path in GRADLE_WRAPPER_ARTIFACTS:
+                    source = wrapper_project / relative_path
+                    if not source.is_file():
+                        raise BuildError(
+                            detail=f"Gradle Wrapper 생성 산출물이 없습니다: {relative_path}"
+                        )
+                    destination = project_dir / relative_path
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+        except BuildError:
+            raise
+        except OSError as exc:
+            raise BuildError(detail=f"Gradle Wrapper 격리 생성 중 OS 오류: {exc}") from exc
+
+    @classmethod
+    def _wrapper_is_valid(cls, project_dir: Path) -> bool:
+        """Linux script와 Wrapper JAR의 최소 실행 무결성을 확인한다."""
+        gradlew = project_dir / GRADLEW_SCRIPT
+        wrapper_jar = project_dir / GRADLE_WRAPPER_JAR
+        if (
+            not gradlew.is_file()
+            or gradlew.is_symlink()
+            or not wrapper_jar.is_file()
+            or wrapper_jar.is_symlink()
+        ):
+            return False
+
+        try:
+            with gradlew.open("rb") as script:
+                if script.read(2) != b"#!":
+                    return False
+            with zipfile.ZipFile(wrapper_jar) as archive:
+                if GRADLE_WRAPPER_MAIN_CLASS not in archive.namelist():
+                    return False
+                return archive.testzip() is None
+        except (OSError, zipfile.BadZipFile):
+            return False
+
+    @staticmethod
+    def _read_wrapper_spec(project_dir: Path) -> tuple[str, str] | None:
+        """공식 distribution URL에서 Gradle version/type만 추출한다.
+
+        생성 프로젝트의 properties는 untrusted data이므로 URL 자체를 command나 로그에
+        전달하지 않고 엄격한 allowlist 정규식과 크기 제한을 적용한다.
+        """
+        properties = project_dir / GRADLE_WRAPPER_PROPERTIES
+        if not properties.is_file() or properties.is_symlink():
+            return None
+
+        try:
+            if properties.stat().st_size > MAX_WRAPPER_PROPERTIES_BYTES:
+                return None
+            for line in properties.read_text(encoding="utf-8").splitlines():
+                key, separator, value = line.partition("=")
+                if separator and key.strip() == "distributionUrl":
+                    normalized = value.strip().replace(r"\:", ":")
+                    match = TRUSTED_GRADLE_DISTRIBUTION_RE.fullmatch(normalized)
+                    if match is None:
+                        return None
+                    return match.group("version"), match.group("kind")
+        except (OSError, UnicodeError):
+            return None
+        return None
 
     def _run_gradle_task(self, project_dir: Path) -> None:
         """Gradle Wrapper로 assembleDebug를 실행한다.
@@ -189,9 +324,7 @@ class ApkBuilder:
         )
 
     @classmethod
-    def _run(
-        cls, command: list[str], cwd: Path, label: str
-    ) -> subprocess.CompletedProcess[str]:
+    def _run(cls, command: list[str], cwd: Path, label: str) -> subprocess.CompletedProcess[str]:
         """subprocess를 실행하고 출력을 로깅한다.
 
         Args:
@@ -214,9 +347,7 @@ class ApkBuilder:
                 check=False,
             )
         except FileNotFoundError as exc:
-            raise BuildError(
-                detail=f"{label} 실행 파일을 찾을 수 없습니다: {command[0]}"
-            ) from exc
+            raise BuildError(detail=f"{label} 실행 파일을 찾을 수 없습니다: {command[0]}") from exc
         except OSError as exc:
             raise BuildError(detail=f"{label} 실행 중 OS 오류: {exc}") from exc
 

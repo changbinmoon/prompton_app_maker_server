@@ -40,7 +40,7 @@ Covered interactions:
 - Artifact upload and HeadObject/size verification before SUCCESS.
 - Accepted SUCCESS before SQS deletion.
 - FAILED omission/original-error preservation and post-SUCCESS delete-failure behavior.
-- SQS long polling, one-message processing, deletion, and visibility extension.
+- SQS 500ms empty-response polling cadence, one-message processing, deletion, and visibility extension.
 - S3 raw requirements/assets/source/artifact behavior.
 - Hermes refinement/fallback, Kiro command, and Gradle build interactions through deterministic recorders.
 

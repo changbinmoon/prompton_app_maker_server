@@ -63,7 +63,7 @@
 **Purpose**: Receive, validate, extend, and delete SQS messages through the existing AWS SDK boundary.
 
 **Responsibilities**:
-- Long-poll for one message and return a validated `SQSMessage`.
+- Short-poll for one message and return a validated `SQSMessage`; the orchestrator waits 0.5 seconds after an empty response.
 - Extend visibility through the existing API.
 - Delete only when instructed by `WorkerOrchestrator` after mandatory SUCCESS.
 - Preserve existing boto3 retry and IAM behavior.

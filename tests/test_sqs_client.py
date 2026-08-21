@@ -9,7 +9,7 @@ import pytest
 
 from models.entities import SUPPORTED_SCHEMA_VERSION, Config
 from models.exceptions import InvalidRequirementsError
-from sqs.client import LONG_POLL_WAIT_SECONDS, SQSClient
+from sqs.client import SQS_RECEIVE_WAIT_SECONDS, SQSClient
 
 
 class FakeSQS:
@@ -73,8 +73,8 @@ def test_receive_message_returns_none_when_empty(config: Config) -> None:
     assert client.receive_message() is None
 
 
-def test_receive_message_uses_long_polling(config: Config, job_id: str) -> None:
-    """Long Polling 파라미터로 1건만 수신한다 (NFR Pattern 11)."""
+def test_receive_message_uses_short_polling(config: Config, job_id: str) -> None:
+    """즉시 반환하는 Short Polling 파라미터로 1건만 수신한다."""
     fake = FakeSQS([{"ReceiptHandle": "rh-1", "Body": build_body(job_id)}])
     client = SQSClient(config, client=fake)
 
@@ -84,15 +84,14 @@ def test_receive_message_uses_long_polling(config: Config, job_id: str) -> None:
     assert message.job_id == job_id
     assert message.receipt_handle == "rh-1"
     assert message.requirements_bucket == "test-bucket"
-    assert fake.receive_calls[0]["WaitTimeSeconds"] == LONG_POLL_WAIT_SECONDS
+    assert SQS_RECEIVE_WAIT_SECONDS == 0
+    assert fake.receive_calls[0]["WaitTimeSeconds"] == SQS_RECEIVE_WAIT_SECONDS
     assert fake.receive_calls[0]["MaxNumberOfMessages"] == 1
 
 
 def test_receive_message_rejects_bad_schema_version(config: Config, job_id: str) -> None:
     """지원하지 않는 schemaVersion은 InvalidRequirementsError를 발생시킨다 (BR-019)."""
-    fake = FakeSQS(
-        [{"ReceiptHandle": "rh-1", "Body": build_body(job_id, schemaVersion="2.0")}]
-    )
+    fake = FakeSQS([{"ReceiptHandle": "rh-1", "Body": build_body(job_id, schemaVersion="2.0")}])
     client = SQSClient(config, client=fake)
 
     with pytest.raises(InvalidRequirementsError):

@@ -21,8 +21,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Long Polling 대기 시간 (NFR Design Pattern 11)
-LONG_POLL_WAIT_SECONDS = 20
+#: SQS WaitTimeSeconds는 정수만 지원하므로 500ms cadence는 orchestrator가 제어한다.
+#: 0은 즉시 반환하는 short polling이다.
+SQS_RECEIVE_WAIT_SECONDS = 0
 
 #: 순차 처리 정책상 항상 1건만 수신한다 (NFR-004)
 MAX_MESSAGES_PER_RECEIVE = 1
@@ -50,9 +51,10 @@ class SQSClient:
         )
 
     def receive_message(self) -> SQSMessage | None:
-        """Long Polling으로 메시지 1건을 수신한다.
+        """Short Polling으로 메시지 1건을 수신한다.
 
-        NFR Design Pattern 11: WaitTimeSeconds=20으로 빈 응답과 API 호출을 줄인다.
+        ``WaitTimeSeconds=0``으로 즉시 반환하며, 빈 응답 뒤 500ms cadence는
+        orchestrator가 적용한다.
 
         Returns:
             수신한 메시지. 대기 시간 내 메시지가 없으면 None
@@ -63,7 +65,7 @@ class SQSClient:
         response = self._client.receive_message(
             QueueUrl=self.queue_url,
             MaxNumberOfMessages=MAX_MESSAGES_PER_RECEIVE,
-            WaitTimeSeconds=LONG_POLL_WAIT_SECONDS,
+            WaitTimeSeconds=SQS_RECEIVE_WAIT_SECONDS,
             MessageAttributeNames=["All"],
         )
 

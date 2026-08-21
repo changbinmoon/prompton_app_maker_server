@@ -2,11 +2,13 @@
 
 ## 문서 상태
 
-- **목적**: AI Worker를 실제 AWS dev/test 리소스, kiro-cli Opus 5, Gradle/Android SDK와 연결하여 production-like 검증을 수행한다.
-- **실행 상태**: NOT STARTED
+- **목적**: AI Worker를 실제 AWS dev/test 리소스, kiro-cli Claude Opus 5, Gradle/Android SDK와 연결하여 production-like 검증을 수행한다.
+- **실행 상태**: PARTIALLY EXECUTED - NO-GO (2026-08-21)
 - **코드 브랜치**: `feature/ai-worker-operational-readiness`
 - **주의**: AI-DLC의 Operations 단계는 현재 placeholder다. 이 문서는 사용자 요청으로 작성한 운영 테스트 runbook이며 자동 배포를 의미하지 않는다.
-- **변경 위험**: SQS 메시지, S3 객체, DynamoDB 레코드 생성·삭제와 모델 사용 비용이 발생한다. 격리 리소스와 명시적 테스트 윈도우 승인 후 실행한다.
+- **변경 위험**: SQS 메시지, S3 객체, Backend Job 생성과 모델 사용 비용이 발생한다. 격리 리소스와 명시적 테스트 윈도우 승인 후 실행한다.
+- **Status API migration override**: 아래 historical Gate 3, 4, 9의 direct DynamoDB 단계는 실행하지 않는다. Worker에는 DynamoDB IAM을 추가하지 않고 공식 Backend Job API를 사용한다.
+- **공유 Queue 제한**: 외부 consumer와 로컬 systemd Worker가 동시에 polling하므로 journal Job ID로 처리 주체를 구분한다. Queue purge와 메시지 수동 삭제는 금지한다.
 
 ## 현재 확인된 대상
 
@@ -54,7 +56,7 @@ Worker-side raw ingress, Hermes command/retry/output, and Kiro fallback contract
 - [ ] `/data/jobs` 전용 writable 경로와 충분한 여유 공간
 - [ ] `/data/gradle` 사용 시 디렉터리 생성, 서비스 사용자 소유권, systemd `ReadWritePaths` 반영
 - [ ] Python 3.12와 uv 0.8.12
-- [ ] Hermes Agent v0.20.4 설치와 service-user `HERMES_HOME=/data/hermes` provider/model 설정
+- [ ] Hermes Agent v0.20.4 설치와 service-user `HERMES_HOME=/data/hermes/.hermes` provider/model 설정
 - [ ] `/data/hermes` 서비스 사용자 소유권과 systemd `ReadWritePaths` 반영
 - [ ] kiro-cli 2.18.1 로그인 및 `claude-opus-5` 모델 조회
 - [ ] Java, Gradle, Android SDK, Android Build Tools 설치
@@ -69,14 +71,14 @@ Worker-side raw ingress, Hermes command/retry/output, and Kiro fallback contract
 - [ ] DynamoDB: GetItem, UpdateItem
 - [ ] 리소스 ARN 수준 최소 권한과 명시적 거부 테스트
 - [ ] `/etc/prompton-worker/env` mode 0640 이하
-- [ ] `HERMES_CLI_PATH` 절대 경로와 `HERMES_HOME=/data/hermes` 설정
+- [ ] `HERMES_CLI_PATH` 절대 경로와 `HERMES_HOME=/data/hermes/.hermes` 설정
 - [ ] 환경 파일에 AWS Access Key, Secret Key, Session Token이 없음
 - [ ] 필수 환경 변수와 실제 리소스명 일치
 
 ### 5. 승인과 증적 저장 위치
 
 - [ ] AWS 변경 승인
-- [ ] Opus 5 사용량/비용 승인
+- [ ] Claude Opus 5 사용량/비용 승인
 - [ ] 테스트 시작·종료 시각과 담당자 확정
 - [ ] 중단 권한자와 롤백 담당자 확정
 - [ ] 테스트 증적 저장 위치 확정
@@ -258,13 +260,165 @@ aws dynamodb describe-table --table-name "$DYNAMODB_TABLE_NAME"
 
 중단 시 Worker를 정지하고 새 메시지 전송을 중단한다. 진행 중 메시지는 삭제하지 않고 Visibility/DLQ 상태를 보존한 뒤 증적을 수집한다.
 
+## 2026-08-21 승인된 복구 검증 결과
+
+### 완료 체크리스트
+
+- [x] Kiro CLI 서비스 계정 인증과 companion runtime 복구
+- [x] `claude-sonnet-4.5` 비대화식 file-generation smoke
+- [x] Hermes service-account 실패 원인 진단
+- [x] Worker graceful restart와 startup 검증
+- [x] 공식 Backend Job 1건의 상태 전이와 artifact 검증
+- [x] journal Job ID로 외부 Worker와 로컬 systemd Worker 결과 구분
+
+### 증적과 판정
+
+| 검증 항목 | 결과 | 핵심 증적 |
+|---|---|---|
+| Kiro service account | PASS | `HOME=/data/hermes` 인증, `chat --help`, non-interactive smoke exit 0 |
+| Kiro 모델 | PASS | Kiro 2.18.1 지원 모델 `claude-sonnet-4.5`; 정확한 smoke 파일 생성 |
+| Hermes refinement | DEGRADED | provider/model과 usable credential 부재로 3회 exit 1; raw Kiro fallback 정상 |
+| systemd Worker | PASS | PID 44641, active/running/enabled, NRestarts=0, 실패 후 polling 복귀 |
+| 공식 Backend Job | PASS WITH EXTERNAL WORKER | Job `58c76a31-8715-4804-8cd7-84ac25e5a409`이 SUCCESS 100과 debug APK 제공 |
+| 성공 APK | PASS | 10,624,278 bytes, SHA-256 `36bc02994ac1ed73772c3aca97f7d9852f6c71a9f38ab2099491a8e5e7f9e88b`, ZIP/signature/aapt2 통과 |
+| 로컬 Kiro code generation | PASS | Job `5d5efe3d-56cb-4297-a1a4-421dc3fc8c76`, 37 files, 58,992 bytes, Gradle project markers 생성 |
+| 로컬 Android build | FAIL | 31-byte ASCII `gradle-wrapper.jar` placeholder로 `GradleWrapperMain` ClassNotFoundException |
+| 로컬 full E2E 귀속 | BLOCKED | 공유 Queue의 외부 consumer가 공식 성공 Job을 처리했고 로컬은 stale/redelivered Job을 처리 |
+
+외부 Worker 성공 Job의 artifact endpoint와 download는 HTTP 200이었고 metadata size가 실제 APK size와 일치했다. Presigned URL, 인증 code/token, 계정 식별자는 출력하거나 증적 파일에 저장하지 않았다. 안전한 artifact metadata는 `/tmp/prompton-e2e/732ae0a0-37a6-4397-b38f-a5ba8fc124a0/artifact-verification.json`에 저장했다.
+
+로컬 Job은 Hermes raw fallback 후 Kiro가 03:12:22 UTC에 정상 종료하여 BUILDING에 진입했다. 생성된 `gradlew` 때문에 builder가 wrapper 존재만 신뢰했으나 `gradle-wrapper.jar`는 실제 ZIP/JAR가 아니라 `Gradle wrapper JAR placeholder` text였다. 따라서 이번 실패는 Kiro 인증/runtime 실패가 아니라 생성 wrapper 무결성 및 builder validation gap이다.
+
+### 전체 Gate 결정
+
+- Backend/SQS/S3/artifact 성공 경로: **PASS**, 단 처리 주체는 외부 Worker다.
+- 로컬 service-account Kiro runtime과 Android 프로젝트 생성: **PASS**.
+- 로컬 APK build와 local full E2E: **FAIL/BLOCKED**.
+- Production activation: **NO-GO**.
+- Extension compliance: Security Baseline, Resiliency Baseline, Property-Based Testing은 disabled이므로 N/A다. Project-specific secret redaction, Status API, SQS 안전 제약은 준수했다.
+
+## 2026-08-21 Gradle Wrapper 복구 후속 결과
+
+- **Source fix**: PASS - Wrapper script/JAR/properties 및 공식 distribution URL을 검증하고, invalid artifact는 격리 최소 Gradle project에서 재생성 후 재검증한다.
+- **Kiro prevention**: PASS - Kiro는 wrapper scripts/binary JAR를 생성하지 않고 compatible official properties만 생성한다.
+- **Automated gates**: PASS - targeted 19 tests, full 152 tests, Ruff lint, changed-file format, strict mypy 39 files, compileall, lock, diff checks.
+- **Real wrapper recovery**: PASS - 31-byte placeholder를 47,505-byte valid JAR로 복구하고 `GradleWrapperMain.class`를 확인했다.
+- **Isolated APK smoke**: PASS WITH CORRECTIONS - temporary Platform 35 overlay와 generated Kotlin compatibility 4개 보정 후 7,214,177-byte APK를 생성했다.
+- **APK evidence**: SHA-256 `20076c994eb6c3a6862258b5e442df36ce9edc130d213c79c4ecc481d477f799`; ZIP, signature, aapt2 통과; package `com.appmaker.generated.app1945`, targetSdk 35, launchable `MainActivity`.
+- **Original preservation**: PASS - 원본 Job의 31-byte placeholder와 SHA-256은 불변이며 temporary project/SDK/APK/log는 삭제했다.
+- **Deployment status**: PENDING - source fix는 active `/opt/prompton-ai-worker`에 배포하거나 service restart하지 않았다.
+
+## 2026-08-21 SDK 36 및 생성 호환성 후속 결정
+
+- **Source SDK policy**: `minSdk=26`, `compileSdk=36`, `targetSdk=36`, Build Tools 36.0.0으로 고정하고 Client API level은 무시한다.
+- **Source toolchain policy**: AGP 8.10.1, Gradle 8.11.1, JDK 17, Kotlin 1.9.24, Compose compiler 1.5.14, Compose BOM 2024.06.00으로 고정한다.
+- **Compose prevention**: Material 3 progress에는 lambda가 아닌 `Float`를 전달하고 foundation pager 등 experimental API는 명시적으로 opt-in한다.
+- **Host readiness**: `/opt/android-sdk`에 Platform 36과 Build Tools 36.0.0이 존재한다. Platform 35 부재는 새 source policy에서는 요구되지 않는다.
+- **Kiro account plan**: `KIRO FREE`, 50 covered credits 중 4.81 사용(9%), 2026-09-01 reset.
+- **Kiro model decision**: Kiro CLI 2.18.1의 9개 supported model에 Opus 계열과 `claude-opus-5`가 없으므로 `claude-sonnet-4.5`를 유지한다.
+- **Deployment decision**: 사용자 지시에 따라 source 변경은 active Worker에 배포하지 않고 service를 restart하지 않는다.
+- **Duplicate consumer decision**: 사용자 지시에 따라 현재 중복 consumer 상태를 accepted risk로 유지하며 Queue/external Worker를 변경하지 않는다.
+- **Historical evidence**: 위 targetSdk 35 APK smoke는 당시 실패 원인 분석 증적으로 보존하며 현재 generation policy를 나타내지 않는다.
+
 ## 현재 차단 요소
 
-1. **BLOCKER**: 실제 Backend 저장소/API의 raw Client JSON S3 저장 및 SQS pointer 연결 미구현/미검증
-2. **BLOCKER**: service-user Hermes `HERMES_HOME` provider/model/credential provisioning과 live one-shot 호출 미검증
-3. **BLOCKER**: 실제 테스트 EC2, IAM Role, Queue/DLQ 격리 방식 미검증
-4. **BLOCKER**: 실제 Java/Android Gradle Plugin 호환 조합 미확정
-5. **APPROVAL REQUIRED**: AWS 리소스 변경, Hermes provider, Opus 5 사용 비용
-6. **PENDING**: live E2E, performance baseline, dependency/Bandit/IAM/systemd security 검증
+1. **PENDING POST-DEPLOY E2E**: SDK36/Compose/wrapper source와 Opus 5는 active Worker에 배포됐지만, 배포 후 no-edit Android Job/APK E2E는 아직 실행하지 않았다.
+2. **ACCEPTED RISK**: 공유 dev Queue의 외부 consumer와 로컬 systemd Worker 동시 polling은 사용자 결정으로 유지한다.
+3. **DEGRADED / ROOT CAUSE CONFIRMED**: systemd Worker의 `HERMES_HOME=/data/hermes`가 잘못됐다. Hermes는 이 값을 exact config/state directory로 사용하므로 실제 `/data/hermes/.hermes/config.yaml`을 우회하고 Provider Auto/인증 없음으로 매번 exit 1을 반환한다. 변수만 동일하게 둔 synthetic call에서 Worker 환경은 exit 1/provider-not-configured였고, `HERMES_HOME=/data/hermes/.hermes`는 exit 0/exact output이었다. Active Job drain 후 protected env와 source `deploy/env.example`을 교정하고 graceful restart/new-Job 검증이 필요하다.
+4. **PENDING**: 실패/DLQ, isolated Visibility, 성능 기준선, dependency/Bandit/IAM/systemd security의 전체 Gate 검증이 남아 있다.
 
 이 차단 요소가 해소되기 전에는 production activation을 승인하지 않는다.
+
+## 2026-08-21 current source Worker 배포 결과
+
+- **Scope**: Source/active release inventory 27개 중 달랐던 `ai/generator.py`, `ai/refiner.py`, `build/builder.py` 세 파일만 배포했다. Manifest, lock, unit은 이미 동일했다.
+- **Predeploy gate**: frozen lock/sync, full pytest 152 passed/70 known warnings, Ruff, strict mypy 39 files, compileall, diff, Status API/no-DynamoDB boundary 통과.
+- **Host readiness**: protected env owner/mode와 key contract, writable data paths, Platform 36, Build Tools 36.0.0, Worker JDK 17, disk, idle state 통과.
+- **Rollback**: 기존 active 세 파일과 checksum/mode manifest를 root-only mode 0600 backup으로 보존했다.
+- **Install**: Worker graceful stop 후 세 파일을 fsync 및 atomic replace했고 owner/mode를 보존했다. Installed hash는 source와 일치하고 전체 27-file inventory difference는 0이다.
+- **Deployed verification**: compile, exact `claude-opus-5`, SDK36/Compose fixed guardrails, Wrapper recovery, pinned dependencies, Status API/no-DynamoDB boundary, systemd unit 검증 통과.
+- **Worker restore**: PID 49807, active/running, Result=success, NRestarts=0, TasksCurrent=1, startup error marker 0, Kiro child 0.
+- **Authentication**: post-start `IamIdentityCenter`와 exact Opus 5 catalog support 확인.
+- **Boundary**: Job을 제출하지 않았고 Queue/IAM/DynamoDB/external Worker/env/unit/venv/authentication을 변경하지 않았다.
+
+## 2026-08-21 Kiro 조직 프로필 전환 결과
+
+- **Credential transition**: PASS - 명시적으로 승인된 local DB transfer를 SQLite online snapshot과 atomic replace로 수행했고 source, pre-copy backup, installed DB integrity가 모두 `ok`다.
+- **Identity/profile**: PASS - service account는 `IamIdentityCenter`이며 TTY profile fetch와 현재 profile 확정이 정상 종료했다.
+- **Plan**: `KIRO PRO+`, 2000 covered credits 중 1603.14 사용(80%), 2026-09-01 reset.
+- **Catalog**: 19개 모델이며 exact `claude-opus-5`를 지원한다. Source와 active deployed model 모두 Opus 5다.
+- **Opus 5 smoke**: PASS - non-interactive exit 0, 정확히 한 파일과 정확한 content를 검증했고 temporary directory를 삭제했다.
+- **Worker restore**: PASS - PID 49141, active/running, NRestarts=0, TasksCurrent=1, startup error marker 없음.
+- **Deployment boundary**: Opus 5 model-only active hotfix만 적용됐다. SDK36/Compose/wrapper 등 나머지 source 변경은 계속 미배포 상태다.
+- **Safety**: 인증 URL/code/token, email/account/provider 식별자를 기록하지 않았고 Queue, IAM, DynamoDB, external Worker를 변경하지 않았다.
+
+
+## 2026-08-21 Kiro Opus 5 quick activation
+
+- **Approval**: 사용자가 exact Opus 5 지원 확인 후 quick source/runtime activation을 요청했다.
+- **Source**: `KIRO_CLI_MODEL`과 focused assertion을 `claude-opus-5`로 변경했다.
+- **Source validation**: generator tests 9 passed; Ruff lint/format, strict mypy, compileall, selected diff check 통과.
+- **Active hotfix**: Worker idle 확인 후 graceful stop하고 deployed generator를 root-only mode 0600으로 backup했다. Deployed unified diff는 Sonnet 4.5에서 Opus 5로 바뀐 두 줄뿐이다.
+- **Runtime validation**: deployed venv compile과 AST model 검증 통과. Service-account Opus 5 smoke는 exit 0, 정확히 한 파일과 exact content를 생성하고 cleanup했다.
+- **Worker restore**: PID 49405, active/running, NRestarts=0, TasksCurrent=1, startup error marker 0, idle Kiro child 0.
+- **Boundary**: 전체 source tree는 배포하지 않았다. Queue, IAM, DynamoDB, external Worker, authentication state는 변경하지 않았다.
+
+## 2026-08-21 active SQS polling 진단
+
+- **사용자 보고**: Queue에 메시지가 보이지만 local Worker가 가져오지 못하는 것으로 관찰됐다.
+- **실제 수신**: Local Worker는 04:42:40 UTC에 메시지 1건을 수신하고 Visibility Extender를 시작했다.
+- **현재 처리**: ANALYZING 완료 후 Hermes 3회 실패를 raw requirements fallback으로 처리했고 04:42:53 UTC부터 exact `claude-opus-5` 코드 생성 중이다.
+- **순차 처리 원인**: `MAX_MESSAGES_PER_RECEIVE=1`이며 main loop가 `process_job()`을 동기 실행한다. 현재 Job이 종료되기 전에는 다음 `receive_message()`를 호출하지 않는다.
+- **Queue read-only evidence**: 최초 visible 0/in-flight 3, 후속 visible 2/in-flight 1, delayed 0이었다. Approximate attributes이며 외부 consumer 또는 신규 메시지의 영향을 받을 수 있다.
+- **오류 판정**: `sqs_receive_failed`는 0건이다. Status API intermediate PATCH 409는 `action=continue`로 처리되어 code generation을 막지 않는다.
+- **복구 판정**: 복구 불필요. Active Job 중 Worker restart는 redelivery 위험을 높이므로 수행하지 않는다.
+- **안전 경계**: Manual receive/delete/purge/change-visibility, Queue/IAM/DynamoDB/external Worker/config 변경을 수행하지 않았다.
+
+## 2026-08-21 Hermes prompt refinement 실패 원인
+
+- **Hermes runtime**: v0.20.4 executable과 `HOME=/data/hermes`는 정상이다.
+- **Worker invocation**: `--ignore-rules --toolsets context_engine --oneshot <prompt>`를 실행하고 exit 0/비어 있지 않은 64 KiB 이하 stdout만 승인한다.
+- **Retry evidence**: Job마다 attempt 1~3이 모두 exit code 1이며 1초/2초 delay 후 raw fallback으로 전환됐다.
+- **Root cause**: Hermes inference backend 미설정. Resolved 상태는 Model `(not set)`, Provider `Auto`이며 inference OAuth/API-key provider가 모두 not logged in/not configured다.
+- **Credential evidence**: Service env와 Hermes `.env`에 active provider/model/API-key/endpoint가 없고 `active_provider`는 null이며 Hermes inference auth file도 없다.
+- **Non-causes**: executable, service HOME, input JSON, output path, toolset, Kiro organization profile은 정상이다. SQLite WAL compatibility warning은 inference exit 1과 무관하다.
+- **Fallback impact**: Prompt refinement만 생략된다. Worker는 원본 JSON과 동일한 SDK36/Compose guardrail을 exact Opus 5에 전달해 generation을 계속한다.
+- **Security behavior**: Refiner는 untrusted stdout/stderr를 journal에 기록하지 않아 실제 provider 오류 문자열 대신 exit code만 남긴다.
+
+## 2026-08-21 service Hermes inference 설정 완료
+
+- **승인**: 사용자가 ubuntu의 working Hermes inference 설정을 `prompton` service HOME에 적용하도록 요청했다.
+- **최소 이전**: Ubuntu `config.yaml`에서 `model`과 active custom provider 한 항목만 추출했다. Unrelated auth pool과 inference 설정이 없는 `.env`는 복사하지 않았다.
+- **Credential 위치**: Active provider definition 안의 literal API credential만 minimal config에 포함되며 값은 출력하거나 audit에 기록하지 않았다.
+- **Rollback**: Service target은 이전에 없었다. Incoming minimal config와 absence manifest를 root-only mode 0600 backup에 보존했다.
+- **설치**: `/data/hermes/.hermes/config.yaml`, `prompton:prompton`, mode 0600, parent 0700, source snapshot과 hash 일치.
+- **Status**: Service Hermes가 configured model/custom provider를 정상 해석하고 exit 0을 반환한다.
+- **Inference smoke**: Restricted one-shot은 exit 0과 exact `HERMES_SERVICE_OK`를 반환했다.
+- **Worker integration**: Deployed `PromptRefiner`가 synthetic requirements로 nonempty/64 KiB 이하 output을 생성하고 temporary directory를 정리했다.
+- **Service coordination**: Active Job은 Hermes 단계를 이미 지난 상태이고 Hermes child가 없어 Worker stop/restart 없이 atomic config만 설치했다.
+- **Expected effect**: 이후 Job부터 Hermes refinement가 활성화된다. 이미 raw fallback으로 진행한 Job에는 소급 적용되지 않는다.
+- **Safety**: Project/user data를 smoke에 사용하지 않았고 Queue/IAM/DynamoDB/external Worker/Kiro auth를 변경하지 않았다.
+
+## 2026-08-21 SQS 500ms short-poll 변경
+
+- **요청**: 빈 Queue polling을 500ms cadence로 변경한다.
+- **구현 해석**: SQS `WaitTimeSeconds`는 정수이므로 0초 short poll 후 빈 응답에만 0.5초 sleep을 적용한다.
+- **Shutdown**: shutdown requested 상태에서는 추가 sleep을 생략한다.
+- **불변 조건**: `MaxNumberOfMessages=1`, 순차 Job 처리, visibility extension, SUCCESS 이후 delete gate는 유지한다.
+- **운영 위험**: Idle receive API 요청량이 최대 약 40배 증가하고 short polling false-empty 및 비용/API load가 증가할 수 있다.
+- **Queue boundary**: Queue attribute, IAM, DynamoDB, external Worker는 변경하지 않는다.
+- **Deployment**: Active Job에 graceful shutdown을 요청해 강제 종료 없이 현재 처리가 반환된 후 Worker가 종료됐다. 두 polling 파일만 root-only backup 후 atomic 배포했다.
+- **Rollback**: `/var/backups/prompton-worker/sqs-500ms-polling-20260821T053253Z`, prior files와 manifest는 root:root mode 0600이다.
+- **Deployed verification**: 27-file source/active inventory difference 0, deployed compile 통과, execution recorder에서 `WaitTimeSeconds=0`, `MaxNumberOfMessages=1`, empty delay 정확히 0.5초를 확인했다.
+- **Worker restore**: PID 53329, active/running, NRestarts=0, TasksCurrent=1, startup/observation error marker 0, `IamIdentityCenter` 유지.
+- **Idle observation**: Local receive 0건, Queue visible 0이었다. Approximate in-flight 1건은 다른 consumer일 수 있다.
+- **Accepted operational risk**: 약 40배 idle API 요청량과 short-poll CPU/API overhead를 이 quick change에서 수용한다.
+
+## 2026-08-21 실제 요청 Hermes replay 결과
+
+- 사용자 승인으로 terminal Job의 실제 requirements를 service-owned 격리 경로에서 Hermes provider에 다시 전송했다.
+- Deployed prompt builder, 실제 Job ID, service HOME/provider/model과 exact one-shot flags를 사용한 3,327-byte prompt가 attempt 1에서 exit 0, stdout 1,255 bytes, stderr 0으로 성공했다.
+- Trimmed 1,254-byte output은 deployed size/NUL gate, wrapper/fence/credential 검사와 Android guardrail 16/16을 통과하고 원본의 valid package candidate를 보존했다.
+- 결과는 historical 실행과 구분되는 `refined-prompt-replay.md`로 terminal Job에 atomic/mode 0600 보존했다. Canonical `refined-prompt.md`는 생성하지 않았다.
+- 같은 실제 입력의 replay가 성공한 이유는 `HOME=/data/hermes`만 설정하고 Worker의 잘못된 `HERMES_HOME=/data/hermes`를 상속하지 않았기 때문이다. 따라서 이 replay는 prompt content를 배제했지만 Worker 환경을 재현하지 않았으며, 이전 transient 판정은 superseded다. 변수-only 재현에서 Worker 값은 Provider Auto/exit 1, corrected `HERMES_HOME=/data/hermes/.hermes`는 exit 0이었다. Historical stderr 원문은 폐기됐지만 동일 190-byte 오류의 안전한 분류는 provider-not-configured/auth-missing이다.
+- 격리 복사본은 삭제했고 Worker는 active/running, `NRestarts=0`, child 0을 유지했다. Queue/IAM/DynamoDB/external Worker/message/service는 변경하지 않았다.
